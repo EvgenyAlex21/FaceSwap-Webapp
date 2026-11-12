@@ -60,19 +60,14 @@ class FaceSwapper:
         return faces
 
     def detect_faces_preview(self, img: np.ndarray) -> Tuple[np.ndarray, int]:
-        """
-        Рисует номера лиц на изображении и возвращает
-        (изображение с номерами, количество лиц).
-        """
+        """Рисует номера лиц и возвращает (превью, количество)."""
         self.initialize()
         faces = self.get_faces(img)
         preview = img.copy()
 
         for i, face in enumerate(faces):
             x1, y1, x2, y2 = map(int, face.bbox)
-            # Рамка
             cv2.rectangle(preview, (x1, y1), (x2, y2), (0, 255, 128), 2)
-            # Номер
             label = str(i)
             (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
             cv2.rectangle(preview, (x1, y1 - th - 10), (x1 + tw + 8, y1), (0, 255, 128), -1)
@@ -89,11 +84,13 @@ class FaceSwapper:
         target_path: str | Path,
         source_face_index: int = 0,
         target_face_indices: Optional[List[int]] = None,
+        swap_all: bool = True,
     ) -> Path:
         """
         Заменяет лица на фото.
-        target_face_indices — список индексов лиц, которые нужно заменить.
-        Если None — заменяет только лицо с индексом 0.
+
+        swap_all=True  → автоматически заменяет ВСЕ найденные лица на целевом фото
+        swap_all=False → заменяет только указанные target_face_indices
         """
         self.initialize()
 
@@ -113,11 +110,14 @@ class FaceSwapper:
 
         source_face = source_faces[source_face_index]
 
-        if target_face_indices is None:
-            target_face_indices = [0]
+        # Автоматический режим: меняем все лица
+        if swap_all or target_face_indices is None:
+            indices = list(range(len(target_faces)))
+        else:
+            indices = target_face_indices
 
         result = target_img.copy()
-        for idx in target_face_indices:
+        for idx in indices:
             if idx < 0 or idx >= len(target_faces):
                 continue
             target_face = target_faces[idx]
@@ -133,12 +133,14 @@ class FaceSwapper:
         target_video_path: str | Path,
         source_face_index: int = 0,
         target_face_indices: Optional[List[int]] = None,
+        swap_all: bool = True,
         max_frames: Optional[int] = None,
         progress_callback=None,
     ) -> Path:
         """
-        Заменяет лица в видео покадрово.
-        target_face_indices — какие лица менять на каждом кадре.
+        Заменяет лица в видео.
+
+        swap_all=True → на каждом кадре автоматически меняет все найденные лица
         """
         self.initialize()
 
@@ -150,9 +152,6 @@ class FaceSwapper:
         if source_face_index >= len(source_faces):
             source_face_index = 0
         source_face = source_faces[source_face_index]
-
-        if target_face_indices is None:
-            target_face_indices = [0]
 
         width, height, fps, total_frames = get_video_info(target_video_path)
         if max_frames:
@@ -172,7 +171,12 @@ class FaceSwapper:
 
                 faces = self.get_faces(frame)
                 if faces:
-                    for idx in target_face_indices:
+                    if swap_all or target_face_indices is None:
+                        indices = list(range(len(faces)))
+                    else:
+                        indices = target_face_indices
+
+                    for idx in indices:
                         if idx < 0 or idx >= len(faces):
                             continue
                         target_face = faces[idx]

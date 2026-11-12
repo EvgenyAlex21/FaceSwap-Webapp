@@ -40,6 +40,7 @@ def write_image(path: str | Path, img: np.ndarray) -> Path:
 
 
 def get_video_info(path: str | Path) -> Tuple[int, int, float, int]:
+    """Возвращает width, height, fps, total_frames"""
     cap = cv2.VideoCapture(str(path))
     if not cap.isOpened():
         raise ValueError(f"Не удалось открыть видео: {path}")
