@@ -1,11 +1,11 @@
 """
-Ядро face-swap. Несколько источников, отрезок видео, стабильная запись.
+Ядро face-swap. GPU по умолчанию, fallback CPU, подробный лог.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional, Tuple, Dict
+from typing import Tuple, Dict
 
 import cv2
 import numpy as np
@@ -17,36 +17,12 @@ from .utils import (
     create_video_writer, OUTPUTS, unique_name,
     upscale_image, enhance_face_region,
 )
-
-
-def _get_providers():
-    try:
-        import onnxruntime as ort
-        available = ort.get_available_providers()
-        providers = []
-        # Не заявляем CUDA, если DLL не грузится — меньше шума в логах
-        if "CUDAExecutionProvider" in available:
-            providers.append(
-                (
-                    "CUDAExecutionProvider",
-                    {
-                        "device_id": 0,
-                        "arena_extend_strategy": "kNextPowerOfTwo",
-                        "gpu_mem_limit": 6 * 1024 * 1024 * 1024,
-                        "cudnn_conv_algo_search": "DEFAULT",
-                        "do_copy_in_default_stream": True,
-                    },
-                )
-            )
-        providers.append("CPUExecutionProvider")
-        return providers
-    except Exception:
-        return ["CPUExecutionProvider"]
+from .gpu_utils import get_providers, get_device_name
 
 
 class FaceSwapper:
     def __init__(self, det_size: Tuple[int, int] = (480, 480)):
-        self.providers = _get_providers()
+        self.providers = get_providers(verbose=True)
         self.det_size = det_size
         self.app = None
         self.swapper = None
@@ -55,25 +31,35 @@ class FaceSwapper:
     def initialize(self):
         if self._initialized:
             return
-        print("[FaceSwapper] Загрузка моделей...")
+        device = get_device_name()
+        print(f"[FaceSwapper] Загрузка моделей на {device}...")
         prov_names = [p[0] if isinstance(p, tuple) else p for p in self.providers]
         print(f"[FaceSwapper] Providers: {prov_names}")
 
-        self.app = FaceAnalysis(
-            name="buffalo_l",
-            root=str(MODELS.parent),
-            providers=self.providers,
-        )
-        self.app.prepare(ctx_id=0, det_size=self.det_size)
+        try:
+            self.app = FaceAnalysis(
+                name="buffalo_l",
+                root=str(MODELS.parent),
+                providers=self.providers,
+            )
+            self.app.prepare(ctx_id=0, det_size=self.det_size)
+        except Exception as e:
+            print(f"[FaceSwapper][ERROR] FaceAnalysis failed: {e}")
+            raise
 
         swapper_path = MODELS / "inswapper_128.onnx"
         if not swapper_path.exists():
             raise FileNotFoundError(
                 f"Модель {swapper_path} не найдена.\nЗапусти: python download_models.py"
             )
-        self.swapper = get_model(str(swapper_path), providers=self.providers)
+        try:
+            self.swapper = get_model(str(swapper_path), providers=self.providers)
+        except Exception as e:
+            print(f"[FaceSwapper][ERROR] InSwapper load failed: {e}")
+            raise
+
         self._initialized = True
-        print("[FaceSwapper] Модели загружены.")
+        print(f"[FaceSwapper] Модели загружены ({device}).")
 
     def set_det_size(self, size: Tuple[int, int]):
         if size != self.det_size:
@@ -200,6 +186,8 @@ class FaceSwapper:
         if frames_to_process == 0:
             raise ValueError("Пустой отрезок видео")
 
+        print(f"[FaceSwapper] Видео: {frames_to_process} кадров, device={get_device_name()}")
+
         out_w = (width * upscale) // 2 * 2
         out_h = (height * upscale) // 2 * 2
         out_path = OUTPUTS / unique_name("swap_vid", ".mp4")
@@ -239,7 +227,6 @@ class FaceSwapper:
                 if upscale > 1:
                     frame = upscale_image(frame, scale=upscale)
 
-                # Подгон размера под writer
                 if frame.shape[1] != out_w or frame.shape[0] != out_h:
                     frame = cv2.resize(frame, (out_w, out_h))
 
@@ -255,6 +242,7 @@ class FaceSwapper:
             cap.release()
             writer.release()
 
+        print(f"[FaceSwapper] Видео готово: {out_path}")
         return out_path
 
 

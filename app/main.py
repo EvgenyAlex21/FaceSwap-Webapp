@@ -408,14 +408,17 @@ def build_ui():
 
 
 if __name__ == "__main__":
-    print("=" * 50)
+    print("=" * 60)
     print("  Local Face Swap")
     print("  http://127.0.0.1:7860")
-    print("=" * 50)
+    print("=" * 60)
+    from app.gpu_utils import setup_device, get_device_name
+    setup_device(verbose=True)
     try:
         get_swapper()
+        print(f"[OK] FaceSwapper готов, устройство: {get_device_name()}")
     except Exception as e:
-        print(f"[warn] {e}")
+        print(f"[WARN] Модели: {e}")
 
     demo, theme, css = build_ui()
     demo.queue(default_concurrency_limit=1).launch(
