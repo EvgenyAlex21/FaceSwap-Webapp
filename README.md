@@ -1,66 +1,59 @@
-# Local Face Swap
+# Local Face Swap (GPU)
 
-Современный полностью локальный face-swap для **фото и видео**.
+Локальный face-swap с ускорением на NVIDIA.
 
-- Без лимитов и облака
-- Автоматическое определение количества лиц
-- Замена всех лиц одной кнопкой
-
-## Главная особенность
-
-Система **сама** определяет, сколько лиц на фото или в кадре видео, и заменяет их все автоматически.  
-Ручной выбор индексов — опциональный.
+- Автоматическая замена всех лиц
+- Настройки скорости под GPU
+- Фото + Видео
 
 ## Быстрый старт
 
 ```bash
 cd local-faceswap
-
 python -m venv venv
-source venv/bin/activate          # Linux / macOS
-# venv\Scripts\activate           # Windows
+source venv/bin/activate          # Windows: venv\Scripts\activate
 
 pip install -r requirements.txt
-python download_models.py         # один раз, ~350 МБ
+python download_models.py
 python app/main.py
 ```
 
-Откроется: **http://127.0.0.1:7860**
+Откроется http://127.0.0.1:7860
 
-## Как пользоваться
+## Ускорение
 
-1. Загрузите фото лица-источника
-2. Загрузите целевое фото или видео
-3. Нажмите **Заменить лицо**
+В интерфейсе есть блок **«Настройки скорости (GPU)»**:
 
-По умолчанию заменяются **все** найденные лица.  
-Если нужно только определённые — снимите галочку «Заменить все лица» и укажите индексы.
+| Режим              | Скорость | Качество |
+|--------------------|----------|----------|
+| Быстрый (320)      | ★★★★★    | ★★★      |
+| Баланс (480)       | ★★★★     | ★★★★     |
+| Качественный (640) | ★★★      | ★★★★★    |
 
-## Требования
+Для **видео** дополнительно:
+- «Детектировать каждые N кадров» → поставь **2 или 3** — сильно ускоряет
 
-- Python 3.10–3.12
-- Рекомендуется NVIDIA GPU (от 6 GB VRAM)
-- Можно на CPU (медленнее)
+## Важно для NVIDIA
 
-Если нет GPU:
+Должен быть установлен именно:
 ```bash
-pip uninstall onnxruntime-gpu
-pip install onnxruntime
+pip install onnxruntime-gpu
 ```
+Не обычный `onnxruntime`.
+
+Проверить:
+```bash
+python -c "import onnxruntime as ort; print(ort.get_available_providers())"
+```
+Должен быть `CUDAExecutionProvider`.
 
 ## Структура
 
 ```
 local-faceswap/
 ├── app/
-│   ├── main.py
-│   ├── swapper.py
-│   └── utils.py
 ├── models/
 ├── outputs/
 ├── download_models.py
-├── requirements.txt
-└── README.md
+└── requirements.txt
 ```
-
-Результаты сохраняются в `outputs/`.

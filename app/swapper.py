@@ -15,11 +15,37 @@ from insightface.model_zoo import get_model
 from .utils import MODELS, read_image, write_image, get_video_info, create_video_writer, OUTPUTS, unique_name
 
 
+def _get_providers():
+    """Приоритет: CUDA → TensorRT → CPU"""
+    providers = []
+    try:
+        import onnxruntime as ort
+        available = ort.get_available_providers()
+        if "TensorrtExecutionProvider" in available:
+            providers.append("TensorrtExecutionProvider")
+        if "CUDAExecutionProvider" in available:
+            providers.append(
+                (
+                    "CUDAExecutionProvider",
+                    {
+                        "device_id": 0,
+                        "arena_extend_strategy": "kNextPowerOfTwo",
+                        "gpu_mem_limit": 4 * 1024 * 1024 * 1024,  # 4 GB
+                        "cudnn_conv_algo_search": "EXHAUSTIVE",
+                        "do_copy_in_default_stream": True,
+                    },
+                )
+            )
+        providers.append("CPUExecutionProvider")
+    except Exception:
+        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    return providers
+
+
 class FaceSwapper:
-    def __init__(self, providers: Optional[List[str]] = None):
-        if providers is None:
-            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        self.providers = providers
+    def __init__(self, det_size: Tuple[int, int] = (640, 640)):
+        self.providers = _get_providers()
+        self.det_size = det_size
         self.app: Optional[FaceAnalysis] = None
         self.swapper = None
         self._initialized = False
@@ -29,13 +55,15 @@ class FaceSwapper:
             return
 
         print("[FaceSwapper] Загрузка моделей...")
+        print(f"[FaceSwapper] Providers: {[p[0] if isinstance(p, tuple) else p for p in self.providers]}")
 
         self.app = FaceAnalysis(
             name="buffalo_l",
             root=str(MODELS.parent),
             providers=self.providers,
         )
-        self.app.prepare(ctx_id=0, det_size=(640, 640))
+        # ctx_id=0 → GPU
+        self.app.prepare(ctx_id=0, det_size=self.det_size)
 
         swapper_path = MODELS / "inswapper_128.onnx"
         if not swapper_path.exists():
@@ -46,10 +74,16 @@ class FaceSwapper:
 
         self.swapper = get_model(str(swapper_path), providers=self.providers)
         self._initialized = True
-        print("[FaceSwapper] Модели загружены.")
+        print("[FaceSwapper] Модели загружены (GPU).")
+
+    def set_det_size(self, size: Tuple[int, int]):
+        """Меняет разрешение детектора (меньше = быстрее)."""
+        if size != self.det_size:
+            self.det_size = size
+            if self.app is not None:
+                self.app.prepare(ctx_id=0, det_size=self.det_size)
 
     def get_faces(self, img: np.ndarray):
-        """Возвращает список лиц (крупные первые)."""
         self.initialize()
         faces = self.app.get(img)
         faces = sorted(
@@ -60,7 +94,6 @@ class FaceSwapper:
         return faces
 
     def detect_faces_preview(self, img: np.ndarray) -> Tuple[np.ndarray, int]:
-        """Рисует номера лиц и возвращает (превью, количество)."""
         self.initialize()
         faces = self.get_faces(img)
         preview = img.copy()
@@ -75,7 +108,6 @@ class FaceSwapper:
                 preview, label, (x1 + 4, y1 - 6),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 2, cv2.LINE_AA
             )
-
         return preview, len(faces)
 
     def swap_image(
@@ -86,12 +118,6 @@ class FaceSwapper:
         target_face_indices: Optional[List[int]] = None,
         swap_all: bool = True,
     ) -> Path:
-        """
-        Заменяет лица на фото.
-
-        swap_all=True  → автоматически заменяет ВСЕ найденные лица на целевом фото
-        swap_all=False → заменяет только указанные target_face_indices
-        """
         self.initialize()
 
         source_img = read_image(source_path)
@@ -109,19 +135,12 @@ class FaceSwapper:
             source_face_index = 0
 
         source_face = source_faces[source_face_index]
-
-        # Автоматический режим: меняем все лица
-        if swap_all or target_face_indices is None:
-            indices = list(range(len(target_faces)))
-        else:
-            indices = target_face_indices
+        indices = list(range(len(target_faces))) if swap_all or target_face_indices is None else target_face_indices
 
         result = target_img.copy()
         for idx in indices:
-            if idx < 0 or idx >= len(target_faces):
-                continue
-            target_face = target_faces[idx]
-            result = self.swapper.get(result, target_face, source_face, paste_back=True)
+            if 0 <= idx < len(target_faces):
+                result = self.swapper.get(result, target_faces[idx], source_face, paste_back=True)
 
         out_path = OUTPUTS / unique_name("swap_img", ".jpg")
         write_image(out_path, result)
@@ -135,12 +154,12 @@ class FaceSwapper:
         target_face_indices: Optional[List[int]] = None,
         swap_all: bool = True,
         max_frames: Optional[int] = None,
+        detect_every_n: int = 1,
         progress_callback=None,
     ) -> Path:
         """
-        Заменяет лица в видео.
-
-        swap_all=True → на каждом кадре автоматически меняет все найденные лица
+        detect_every_n: детектировать лица каждые N кадров (1 = каждый кадр).
+        Больше значение = быстрее, но чуть менее точно при быстром движении.
         """
         self.initialize()
 
@@ -162,6 +181,7 @@ class FaceSwapper:
 
         cap = cv2.VideoCapture(str(target_video_path))
         frame_idx = 0
+        last_faces = []
 
         try:
             while frame_idx < total_frames:
@@ -169,23 +189,23 @@ class FaceSwapper:
                 if not ret:
                     break
 
-                faces = self.get_faces(frame)
-                if faces:
-                    if swap_all or target_face_indices is None:
-                        indices = list(range(len(faces)))
-                    else:
-                        indices = target_face_indices
+                # Детекция раз в N кадров — сильно ускоряет видео
+                if frame_idx % detect_every_n == 0 or not last_faces:
+                    faces = self.get_faces(frame)
+                    last_faces = faces
+                else:
+                    faces = last_faces
 
+                if faces:
+                    indices = list(range(len(faces))) if swap_all or target_face_indices is None else target_face_indices
                     for idx in indices:
-                        if idx < 0 or idx >= len(faces):
-                            continue
-                        target_face = faces[idx]
-                        frame = self.swapper.get(frame, target_face, source_face, paste_back=True)
+                        if 0 <= idx < len(faces):
+                            frame = self.swapper.get(frame, faces[idx], source_face, paste_back=True)
 
                 writer.write(frame)
                 frame_idx += 1
 
-                if progress_callback and frame_idx % 3 == 0:
+                if progress_callback and frame_idx % 5 == 0:
                     progress_callback(min(frame_idx / total_frames, 1.0))
         finally:
             cap.release()
@@ -197,8 +217,8 @@ class FaceSwapper:
 _swapper: Optional[FaceSwapper] = None
 
 
-def get_swapper() -> FaceSwapper:
+def get_swapper(det_size: Tuple[int, int] = (640, 640)) -> FaceSwapper:
     global _swapper
     if _swapper is None:
-        _swapper = FaceSwapper()
+        _swapper = FaceSwapper(det_size=det_size)
     return _swapper

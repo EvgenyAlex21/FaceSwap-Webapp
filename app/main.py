@@ -24,7 +24,14 @@ from app.utils import OUTPUTS, unique_name, write_image
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _to_bgr(img) -> np.ndarray:
+DET_SIZES = {
+    "Быстрый (320)": (320, 320),
+    "Баланс (480)": (480, 480),
+    "Качественный (640)": (640, 640),
+}
+
+
+def _to_bgr(img):
     if img is None:
         return None
     arr = np.array(img)
@@ -35,31 +42,34 @@ def _to_bgr(img) -> np.ndarray:
     return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
 
 
-def _to_pil(bgr: np.ndarray) -> Image.Image:
-    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-    return Image.fromarray(rgb)
+def _to_pil(bgr):
+    return Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
 
 
 def _parse_indices(text: str) -> list:
     if not text or not str(text).strip():
         return []
     parts = str(text).replace(" ", "").split(",")
-    indices = []
-    for p in parts:
-        if p.isdigit():
-            indices.append(int(p))
-    return indices
+    return [int(p) for p in parts if p.isdigit()]
+
+
+def _apply_speed(speed_mode: str):
+    """Применяет размер детектора в зависимости от режима скорости."""
+    size = DET_SIZES.get(speed_mode, (480, 480))
+    swapper = get_swapper()
+    swapper.set_det_size(size)
+    return swapper
 
 
 # ---------------------------------------------------------------------------
 # Detection
 # ---------------------------------------------------------------------------
 
-def detect_faces(img):
+def detect_faces(img, speed_mode):
     if img is None:
         return None, "Загрузите фото"
+    swapper = _apply_speed(speed_mode)
     bgr = _to_bgr(img)
-    swapper = get_swapper()
     preview, count = swapper.detect_faces_preview(bgr)
     if count == 0:
         msg = "Лица не найдены"
@@ -74,27 +84,21 @@ def detect_faces(img):
 # Photo
 # ---------------------------------------------------------------------------
 
-def swap_photo(source_img, target_img, source_idx_str, swap_all, target_idx_str):
+def swap_photo(source_img, target_img, source_idx_str, swap_all, target_idx_str, speed_mode):
     if source_img is None or target_img is None:
         raise gr.Error("Загрузите оба изображения")
 
-    source_bgr = _to_bgr(source_img)
-    target_bgr = _to_bgr(target_img)
+    swapper = _apply_speed(speed_mode)
 
     src_path = OUTPUTS / unique_name("tmp_src", ".jpg")
     tgt_path = OUTPUTS / unique_name("tmp_tgt", ".jpg")
-    write_image(src_path, source_bgr)
-    write_image(tgt_path, target_bgr)
+    write_image(src_path, _to_bgr(source_img))
+    write_image(tgt_path, _to_bgr(target_img))
 
-    source_indices = _parse_indices(source_idx_str)
-    source_idx = source_indices[0] if source_indices else 0
-
-    target_indices = None if swap_all else _parse_indices(target_idx_str)
-    if not swap_all and not target_indices:
-        target_indices = [0]
+    source_idx = (_parse_indices(source_idx_str) or [0])[0]
+    target_indices = None if swap_all else (_parse_indices(target_idx_str) or [0])
 
     try:
-        swapper = get_swapper()
         result_path = swapper.swap_image(
             source_path=src_path,
             target_path=tgt_path,
@@ -102,8 +106,7 @@ def swap_photo(source_img, target_img, source_idx_str, swap_all, target_idx_str)
             target_face_indices=target_indices,
             swap_all=swap_all,
         )
-        result_bgr = cv2.imread(str(result_path))
-        return _to_pil(result_bgr)
+        return _to_pil(cv2.imread(str(result_path)))
     except Exception as e:
         raise gr.Error(str(e))
 
@@ -112,28 +115,23 @@ def swap_photo(source_img, target_img, source_idx_str, swap_all, target_idx_str)
 # Video
 # ---------------------------------------------------------------------------
 
-def swap_video(source_img, target_video, source_idx_str, swap_all, target_idx_str, max_seconds, progress=gr.Progress()):
+def swap_video(source_img, target_video, source_idx_str, swap_all, target_idx_str,
+               max_seconds, speed_mode, detect_every, progress=gr.Progress()):
     if source_img is None or target_video is None:
         raise gr.Error("Загрузите фото лица и видео")
 
-    source_bgr = _to_bgr(source_img)
+    swapper = _apply_speed(speed_mode)
+
     src_path = OUTPUTS / unique_name("tmp_src", ".jpg")
-    write_image(src_path, source_bgr)
+    write_image(src_path, _to_bgr(source_img))
 
-    source_indices = _parse_indices(source_idx_str)
-    source_idx = source_indices[0] if source_indices else 0
-
-    target_indices = None if swap_all else _parse_indices(target_idx_str)
-    if not swap_all and not target_indices:
-        target_indices = [0]
+    source_idx = (_parse_indices(source_idx_str) or [0])[0]
+    target_indices = None if swap_all else (_parse_indices(target_idx_str) or [0])
 
     try:
-        swapper = get_swapper()
-
-        import cv2 as cv
-        cap = cv.VideoCapture(target_video)
-        fps = cap.get(cv.CAP_PROP_FPS) or 25.0
-        total = int(cap.get(cv.CAP_PROP_FRAME_COUNT))
+        cap = cv2.VideoCapture(target_video)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         cap.release()
 
         max_frames = None
@@ -150,6 +148,7 @@ def swap_video(source_img, target_video, source_idx_str, swap_all, target_idx_st
             target_face_indices=target_indices,
             swap_all=swap_all,
             max_frames=max_frames,
+            detect_every_n=int(detect_every),
             progress_callback=prog,
         )
         return str(result_path)
@@ -167,7 +166,6 @@ CUSTOM_CSS = """
     margin: 0 auto !important;
     font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif !important;
 }
-
 .main-header {
     text-align: center;
     padding: 32px 24px 18px 24px;
@@ -184,14 +182,12 @@ CUSTOM_CSS = """
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     margin: 0 0 8px 0 !important;
-    letter-spacing: -0.02em;
 }
 .main-header p {
     color: #94a3b8 !important;
     font-size: 0.98rem !important;
     margin: 0 !important;
 }
-
 .primary-btn {
     background: linear-gradient(135deg, #7c3aed, #4f46e5) !important;
     border: none !important;
@@ -199,21 +195,18 @@ CUSTOM_CSS = """
     font-weight: 600 !important;
     border-radius: 12px !important;
     padding: 14px 28px !important;
-    transition: transform 0.15s ease, box-shadow 0.15s ease !important;
     box-shadow: 0 4px 14px rgba(124, 58, 237, 0.25) !important;
 }
 .primary-btn:hover {
     transform: translateY(-2px) !important;
     box-shadow: 0 10px 28px rgba(124, 58, 237, 0.4) !important;
 }
-
 .secondary-btn {
     background: rgba(255,255,255,0.06) !important;
     border: 1px solid rgba(255,255,255,0.12) !important;
     color: #e2e8f0 !important;
     border-radius: 10px !important;
 }
-
 .tips {
     background: rgba(15, 23, 42, 0.65);
     border: 1px solid rgba(148, 163, 184, 0.12);
@@ -232,12 +225,7 @@ CUSTOM_CSS = """
     font-size: 0.85em;
     color: #a5b4fc;
 }
-
-.status-text {
-    font-size: 0.9rem !important;
-    color: #a5b4fc !important;
-}
-
+.status-text { font-size: 0.9rem !important; color: #a5b4fc !important; }
 footer { display: none !important; }
 """
 
@@ -269,128 +257,92 @@ def build_ui():
         gr.HTML("""
         <div class="main-header">
             <h1>Local Face Swap</h1>
-            <p>Автоматическая замена лиц • Фото и видео • Полностью локально</p>
+            <p>GPU-ускорение • Автозамена всех лиц • Фото и видео</p>
         </div>
         """)
+
+        # ---- Общие настройки скорости ----
+        with gr.Accordion("⚡ Настройки скорости (GPU)", open=True):
+            speed_mode = gr.Radio(
+                choices=list(DET_SIZES.keys()),
+                value="Баланс (480)",
+                label="Качество детекции лиц",
+                info="Меньше разрешение = заметно быстрее. На NVIDIA разница очень ощутима.",
+            )
 
         with gr.Tabs():
 
             # ==================== PHOTO ====================
             with gr.TabItem("🖼  Фото"):
                 with gr.Row(equal_height=False):
-                    with gr.Column(scale=1):
+                    with gr.Column():
                         gr.Markdown("### Лицо-источник")
-                        gr.Markdown("Чьё лицо берём", elem_classes=["status-text"])
-                        src_photo = gr.Image(label="", type="pil", height=270, sources=["upload", "clipboard"])
+                        src_photo = gr.Image(label="", type="pil", height=260, sources=["upload", "clipboard"])
                         btn_detect_src = gr.Button("Найти лица", elem_classes=["secondary-btn"], size="sm")
-                        src_preview = gr.Image(label="Обнаруженные лица", height=180, interactive=False)
+                        src_preview = gr.Image(label="Обнаруженные лица", height=170, interactive=False)
                         src_status = gr.Markdown("Загрузите фото", elem_classes=["status-text"])
-                        src_idx = gr.Textbox(
-                            value="0",
-                            label="Индекс лица-источника (если лиц несколько)",
-                            placeholder="0",
-                            info="По умолчанию берётся самое крупное лицо (0)",
-                        )
+                        src_idx = gr.Textbox(value="0", label="Индекс лица-источника", placeholder="0")
 
-                    with gr.Column(scale=1):
+                    with gr.Column():
                         gr.Markdown("### Целевое фото")
-                        gr.Markdown("Куда вставляем", elem_classes=["status-text"])
-                        tgt_photo = gr.Image(label="", type="pil", height=270, sources=["upload", "clipboard"])
+                        tgt_photo = gr.Image(label="", type="pil", height=260, sources=["upload", "clipboard"])
                         btn_detect_tgt = gr.Button("Найти лица", elem_classes=["secondary-btn"], size="sm")
-                        tgt_preview = gr.Image(label="Обнаруженные лица", height=180, interactive=False)
+                        tgt_preview = gr.Image(label="Обнаруженные лица", height=170, interactive=False)
                         tgt_status = gr.Markdown("Загрузите фото", elem_classes=["status-text"])
+                        swap_all_photo = gr.Checkbox(value=True, label="Заменить все лица автоматически")
+                        tgt_idx = gr.Textbox(value="", label="Или конкретные индексы", placeholder="0,2")
 
-                        swap_all_photo = gr.Checkbox(
-                            value=True,
-                            label="Заменить все лица автоматически",
-                            info="Включено — система сама найдёт и заменит все лица на фото",
-                        )
-                        tgt_idx = gr.Textbox(
-                            value="",
-                            label="Или укажите конкретные индексы",
-                            placeholder="Например: 0,2",
-                            info="Работает только если галочка выше снята",
-                            visible=True,
-                        )
-
-                btn_swap_photo = gr.Button(
-                    "✨  Заменить лицо",
-                    variant="primary",
-                    elem_classes=["primary-btn"],
-                    size="lg",
-                )
+                btn_swap_photo = gr.Button("✨  Заменить лицо", variant="primary", elem_classes=["primary-btn"], size="lg")
                 out_photo = gr.Image(label="Результат", height=400)
 
-                btn_detect_src.click(fn=detect_faces, inputs=[src_photo], outputs=[src_preview, src_status])
-                btn_detect_tgt.click(fn=detect_faces, inputs=[tgt_photo], outputs=[tgt_preview, tgt_status])
+                btn_detect_src.click(fn=detect_faces, inputs=[src_photo, speed_mode], outputs=[src_preview, src_status])
+                btn_detect_tgt.click(fn=detect_faces, inputs=[tgt_photo, speed_mode], outputs=[tgt_preview, tgt_status])
                 btn_swap_photo.click(
                     fn=swap_photo,
-                    inputs=[src_photo, tgt_photo, src_idx, swap_all_photo, tgt_idx],
+                    inputs=[src_photo, tgt_photo, src_idx, swap_all_photo, tgt_idx, speed_mode],
                     outputs=[out_photo],
                 )
 
             # ==================== VIDEO ====================
             with gr.TabItem("🎬  Видео"):
                 with gr.Row(equal_height=False):
-                    with gr.Column(scale=1):
+                    with gr.Column():
                         gr.Markdown("### Лицо-источник")
-                        src_face_v = gr.Image(label="", type="pil", height=250, sources=["upload", "clipboard"])
+                        src_face_v = gr.Image(label="", type="pil", height=240, sources=["upload", "clipboard"])
                         btn_detect_src_v = gr.Button("Найти лица", elem_classes=["secondary-btn"], size="sm")
-                        src_preview_v = gr.Image(label="Обнаруженные лица", height=160, interactive=False)
+                        src_preview_v = gr.Image(label="Обнаруженные лица", height=150, interactive=False)
                         src_status_v = gr.Markdown("Загрузите фото", elem_classes=["status-text"])
-                        src_idx_v = gr.Textbox(
-                            value="0",
-                            label="Индекс лица-источника",
-                            placeholder="0",
-                        )
+                        src_idx_v = gr.Textbox(value="0", label="Индекс лица-источника", placeholder="0")
 
-                    with gr.Column(scale=1):
+                    with gr.Column():
                         gr.Markdown("### Целевое видео")
-                        tgt_video = gr.Video(label="", height=250)
-
-                        swap_all_video = gr.Checkbox(
-                            value=True,
-                            label="Заменить все лица автоматически",
-                            info="На каждом кадре система сама найдёт и заменит все лица",
-                        )
-                        tgt_idx_v = gr.Textbox(
-                            value="",
-                            label="Или укажите конкретные индексы",
-                            placeholder="Например: 0,1",
-                            info="Работает только если галочка выше снята",
-                        )
-                        max_sec = gr.Slider(
-                            minimum=0,
-                            maximum=180,
-                            value=20,
-                            step=1,
-                            label="Максимальная длина обработки (сек)",
-                            info="0 = обработать всё видео",
+                        tgt_video = gr.Video(label="", height=240)
+                        swap_all_video = gr.Checkbox(value=True, label="Заменить все лица автоматически")
+                        tgt_idx_v = gr.Textbox(value="", label="Или конкретные индексы", placeholder="0,1")
+                        max_sec = gr.Slider(0, 180, value=20, step=1, label="Макс. длина (сек), 0 = всё")
+                        detect_every = gr.Slider(
+                            1, 5, value=2, step=1,
+                            label="Детектировать лица каждые N кадров",
+                            info="2–3 = хороший баланс скорости и качества. 1 = максимум точности",
                         )
 
-                btn_swap_video = gr.Button(
-                    "✨  Заменить лицо в видео",
-                    variant="primary",
-                    elem_classes=["primary-btn"],
-                    size="lg",
-                )
+                btn_swap_video = gr.Button("✨  Заменить лицо в видео", variant="primary", elem_classes=["primary-btn"], size="lg")
                 out_video = gr.Video(label="Результат")
 
-                btn_detect_src_v.click(fn=detect_faces, inputs=[src_face_v], outputs=[src_preview_v, src_status_v])
+                btn_detect_src_v.click(fn=detect_faces, inputs=[src_face_v, speed_mode], outputs=[src_preview_v, src_status_v])
                 btn_swap_video.click(
                     fn=swap_video,
-                    inputs=[src_face_v, tgt_video, src_idx_v, swap_all_video, tgt_idx_v, max_sec],
+                    inputs=[src_face_v, tgt_video, src_idx_v, swap_all_video, tgt_idx_v, max_sec, speed_mode, detect_every],
                     outputs=[out_video],
                 )
 
         gr.HTML("""
         <div class="tips">
-            <strong>Как это работает</strong><br>
-            • По умолчанию включена <strong>автоматическая замена всех лиц</strong> — система сама определяет, сколько лиц на фото/видео, и заменяет каждое.<br>
-            • Если нужно заменить только конкретные лица — снимите галочку и укажите индексы (например <code>0,2</code>).<br>
-            • Кнопка «Найти лица» показывает номера лиц на фото.<br>
-            • Лучшее качество дают чёткие фронтальные фото.<br>
-            • Результаты сохраняются в папку <code>outputs/</code>.
+            <strong>Ускорение под NVIDIA</strong><br>
+            • Режим <strong>Быстрый (320)</strong> — максимальная скорость детекции.<br>
+            • Режим <strong>Баланс (480)</strong> — рекомендуется для большинства случаев.<br>
+            • Для видео ставьте «детектировать каждые 2–3 кадра» — это даёт самый большой прирост скорости.<br>
+            • Убедитесь, что установлен <code>onnxruntime-gpu</code> (не обычный onnxruntime).
         </div>
         """)
 
@@ -399,9 +351,15 @@ def build_ui():
 
 if __name__ == "__main__":
     print("=" * 50)
-    print("  Local Face Swap")
+    print("  Local Face Swap (GPU)")
     print("  http://127.0.0.1:7860")
     print("=" * 50)
+
+    # Прогрев при старте
+    try:
+        get_swapper()
+    except Exception as e:
+        print(f"[warn] Модели пока не загружены: {e}")
 
     demo = build_ui()
     demo.queue(default_concurrency_limit=1).launch(
