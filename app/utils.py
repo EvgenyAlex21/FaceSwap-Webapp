@@ -49,15 +49,29 @@ def get_video_info(path: str | Path):
 
 
 def create_video_writer(path: str | Path, width: int, height: int, fps: float):
-    # H264 более совместим с браузерами; fallback mp4v
+    """
+    На Windows надёжнее всего mp4v (mpeg4).
+    H264/avc1 часто требуют openh264 DLL и падают с error.
+    """
     path = Path(path)
-    for fourcc_name in ("avc1", "H264", "X264", "mp4v"):
-        fourcc = cv2.VideoWriter_fourcc(*fourcc_name)
+    # Ширина/высота должны быть чётными для многих кодеков
+    width = int(width) // 2 * 2
+    height = int(height) // 2 * 2
+    fps = float(fps) if fps and fps > 1 else 25.0
+
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer = cv2.VideoWriter(str(path), fourcc, fps, (width, height))
+    if not writer.isOpened():
+        # Fallback XVID in avi
+        path = path.with_suffix(".avi")
+        fourcc = cv2.VideoWriter_fourcc(*"XVID")
         writer = cv2.VideoWriter(str(path), fourcc, fps, (width, height))
-        if writer.isOpened():
-            return writer
-        writer.release()
-    raise RuntimeError("Не удалось создать VideoWriter")
+    if not writer.isOpened():
+        raise RuntimeError(
+            "Не удалось создать VideoWriter. "
+            "Попробуйте другое разрешение или переустановите opencv-python-headless."
+        )
+    return writer, path, width, height
 
 
 def upscale_image(img: np.ndarray, scale: int = 2) -> np.ndarray:
@@ -78,12 +92,3 @@ def enhance_face_region(img: np.ndarray, strength: float = 0.6) -> np.ndarray:
     l = clahe.apply(l)
     enhanced = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
     return cv2.addWeighted(img, 1.0 - strength * 0.5, enhanced, strength * 0.5, 0)
-
-
-def safe_copy_to_outputs(src: Path, prefix: str = "result") -> Path:
-    """Копирует файл в outputs с уникальным именем (обход PermissionError Gradio)."""
-    src = Path(src)
-    ext = src.suffix or ".mp4"
-    dst = OUTPUTS / unique_name(prefix, ext)
-    shutil.copy2(src, dst)
-    return dst

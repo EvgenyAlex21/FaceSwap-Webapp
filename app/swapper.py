@@ -1,8 +1,5 @@
 """
-Ядро face-swap.
-- Несколько исходных лиц → разные лица на цели
-- Точная замена на каждом кадре
-- Выбор отрезка видео (start/end сек)
+Ядро face-swap. Несколько источников, отрезок видео, стабильная запись.
 """
 
 from __future__ import annotations
@@ -27,6 +24,7 @@ def _get_providers():
         import onnxruntime as ort
         available = ort.get_available_providers()
         providers = []
+        # Не заявляем CUDA, если DLL не грузится — меньше шума в логах
         if "CUDAExecutionProvider" in available:
             providers.append(
                 (
@@ -93,7 +91,7 @@ class FaceSwapper:
         )
         return faces
 
-    def detect_faces_preview(self, img: np.ndarray) -> Tuple[np.ndarray, int]:
+    def detect_faces_preview(self, img: np.ndarray):
         self.initialize()
         faces = self.get_faces(img)
         preview = img.copy()
@@ -107,45 +105,44 @@ class FaceSwapper:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 2, cv2.LINE_AA)
         return preview, len(faces)
 
-    def _load_source_face(self, source_path: str | Path, face_index: int = 0):
+    def _load_source_face(self, source_path, face_index: int = 0):
         img = read_image(source_path)
         faces = self.get_faces(img)
         if not faces:
             raise ValueError(f"На фото {source_path} лицо не найдено")
-        idx = min(face_index, len(faces) - 1)
+        idx = min(int(face_index), len(faces) - 1)
         return faces[idx]
 
     def swap_image(
         self,
-        source_map: Dict[int, Tuple[str | Path, int]],
-        target_path: str | Path,
+        source_map: Dict[int, Tuple],
+        target_path,
         swap_all_with_first: bool = False,
         enhance: bool = False,
         upscale: int = 1,
         out_format: str = "jpg",
+        progress_callback=None,
     ) -> Path:
-        """
-        source_map: { target_face_index: (source_image_path, source_face_index) }
-        Если swap_all_with_first=True и в map только один источник —
-        все лица на цели заменяются этим источником.
-        """
         self.initialize()
+        if progress_callback:
+            progress_callback(0.1, "Поиск лиц...")
+
         target_img = read_image(target_path)
         target_faces = self.get_faces(target_img)
         if not target_faces:
             raise ValueError("На целевом фото лицо не найдено")
 
-        # Кэш исходных лиц
         source_cache = {}
         for t_idx, (src_path, s_idx) in source_map.items():
             key = (str(src_path), s_idx)
             if key not in source_cache:
                 source_cache[key] = self._load_source_face(src_path, s_idx)
 
-        result = target_img.copy()
+        if progress_callback:
+            progress_callback(0.4, "Замена лиц...")
 
+        result = target_img.copy()
         if swap_all_with_first and source_map:
-            # Один источник на все лица
             first_key = next(iter(source_map.values()))
             src_face = source_cache[(str(first_key[0]), first_key[1])]
             for tf in target_faces:
@@ -156,6 +153,9 @@ class FaceSwapper:
                     src_face = source_cache[(str(src_path), s_idx)]
                     result = self.swapper.get(result, target_faces[t_idx], src_face, paste_back=True)
 
+        if progress_callback:
+            progress_callback(0.75, "Улучшение...")
+
         if enhance:
             result = enhance_face_region(result, strength=0.65)
         if upscale > 1:
@@ -163,24 +163,23 @@ class FaceSwapper:
 
         out_path = OUTPUTS / unique_name("swap_img", f".{out_format}")
         write_image(out_path, result, fmt=out_format)
+
+        if progress_callback:
+            progress_callback(1.0, "Готово")
         return out_path
 
     def swap_video(
         self,
-        source_map: Dict[int, Tuple[str | Path, int]],
-        target_video_path: str | Path,
+        source_map: Dict[int, Tuple],
+        target_video_path,
         swap_all_with_first: bool = False,
         start_sec: float = 0.0,
         end_sec: float = 0.0,
-        detect_every_n: int = 1,
+        detect_every_n: int = 2,
         enhance: bool = False,
         upscale: int = 1,
         progress_callback=None,
     ) -> Path:
-        """
-        source_map: { target_face_index: (source_image_path, source_face_index) }
-        start_sec / end_sec — отрезок видео (end_sec=0 → до конца)
-        """
         self.initialize()
 
         source_cache = {}
@@ -188,25 +187,23 @@ class FaceSwapper:
             key = (str(src_path), s_idx)
             if key not in source_cache:
                 source_cache[key] = self._load_source_face(src_path, s_idx)
-
         if not source_cache:
             raise ValueError("Не загружено ни одного исходного лица")
 
         width, height, fps, total_frames, duration = get_video_info(target_video_path)
-
         start_frame = int(max(0, start_sec) * fps)
         if end_sec and end_sec > start_sec:
             end_frame = min(int(end_sec * fps), total_frames)
         else:
             end_frame = total_frames
-
         frames_to_process = max(0, end_frame - start_frame)
         if frames_to_process == 0:
             raise ValueError("Пустой отрезок видео")
 
-        out_w, out_h = width * upscale, height * upscale
+        out_w = (width * upscale) // 2 * 2
+        out_h = (height * upscale) // 2 * 2
         out_path = OUTPUTS / unique_name("swap_vid", ".mp4")
-        writer = create_video_writer(out_path, out_w, out_h, fps)
+        writer, out_path, out_w, out_h = create_video_writer(out_path, out_w, out_h, fps)
 
         cap = cv2.VideoCapture(str(target_video_path))
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
@@ -238,15 +235,22 @@ class FaceSwapper:
                                 frame = self.swapper.get(frame, faces[t_idx], src_face, paste_back=True)
 
                 if enhance:
-                    frame = enhance_face_region(frame, strength=0.45)
+                    frame = enhance_face_region(frame, strength=0.4)
                 if upscale > 1:
                     frame = upscale_image(frame, scale=upscale)
+
+                # Подгон размера под writer
+                if frame.shape[1] != out_w or frame.shape[0] != out_h:
+                    frame = cv2.resize(frame, (out_w, out_h))
 
                 writer.write(frame)
                 frame_idx += 1
 
-                if progress_callback and frame_idx % 5 == 0:
-                    progress_callback(min(frame_idx / frames_to_process, 1.0))
+                if progress_callback and (frame_idx % 3 == 0 or frame_idx == frames_to_process):
+                    progress_callback(
+                        min(frame_idx / frames_to_process, 1.0),
+                        f"Кадр {frame_idx}/{frames_to_process}",
+                    )
         finally:
             cap.release()
             writer.release()
