@@ -18,6 +18,17 @@ def unique_name(prefix: str, ext: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:10]}{ext}"
 
 
+def copy_to_uploads(src: str | Path, prefix: str = "upload") -> Path:
+    """Копирует файл из temp Gradio в uploads/ — обход PermissionError на Windows."""
+    src = Path(src)
+    if not src.exists():
+        raise FileNotFoundError(f"Файл не найден: {src}")
+    ext = src.suffix or ".mp4"
+    dst = UPLOADS / unique_name(prefix, ext)
+    shutil.copy2(src, dst)
+    return dst
+
+
 def read_image(path: str | Path) -> np.ndarray:
     img = cv2.imread(str(path))
     if img is None:

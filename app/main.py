@@ -15,7 +15,7 @@ import numpy as np
 from PIL import Image
 
 from app.swapper import get_swapper
-from app.utils import OUTPUTS, unique_name, write_image, get_video_info
+from app.utils import OUTPUTS, unique_name, write_image, get_video_info, copy_to_uploads
 
 
 # Детекция лиц
@@ -156,6 +156,10 @@ def on_video_upload(video):
     if video is None:
         return gr.update(maximum=60, value=0), gr.update(maximum=60, value=0), "Загрузите видео"
     try:
+        try:
+            video = str(copy_to_uploads(video, prefix="meta"))
+        except Exception:
+            pass
         _, _, fps, total, duration = get_video_info(video)
         dur = max(1.0, float(duration))
         return (
@@ -175,6 +179,14 @@ def swap_video(src1, src2, src3, idx1, idx2, idx3, map1, map2, map3,
     if target_video is None:
         raise gr.Error("Загрузите видео")
     progress(0.02, desc="Подготовка...")
+    # Gradio temp на Windows часто даёт PermissionError — копируем к себе
+    try:
+        video_path = str(copy_to_uploads(target_video, prefix="vid"))
+        print(f"[Video] Источник скопирован: {video_path}")
+    except Exception as e:
+        print(f"[Video] copy_to_uploads: {e}, используем исходный путь")
+        video_path = target_video
+
     sw = _apply_speed(speed_mode)
     source_map, swap_all = _build_source_map(
         src1, src2, src3, idx1, idx2, idx3, map1, map2, map3, single_mode
@@ -188,7 +200,7 @@ def swap_video(src1, src2, src3, idx1, idx2, idx3, map1, map2, map3,
 
     try:
         result_path = sw.swap_video(
-            source_map=source_map, target_video_path=target_video,
+            source_map=source_map, target_video_path=video_path,
             swap_all_with_first=swap_all,
             start_sec=float(start_sec or 0), end_sec=float(end_sec or 0),
             detect_every_n=int(detect_every),
