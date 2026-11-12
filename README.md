@@ -1,63 +1,62 @@
 # Local Face Swap
 
-Локальная замена лиц на фото и видео.
+Локальная замена лиц + редактор по тексту + оживление фото.
 
 ## Возможности
 
-- **Несколько исходных лиц** — лицо A → цель 0, лицо B → цель 1 и т.д.
-- **Отрезок видео** — слайдеры «Начало / Конец» (сек)
-- Автозамена всех лиц одним источником (галочка)
-- Улучшение резкости + апскейл HD / Full HD
-- Фото: JPG или PNG
-- Результат всегда в папке `outputs/`
+- Замена лиц на фото и видео (несколько источников)
+- Выбор отрезка видео
+- Редактор по текстовой инструкции (InstructPix2Pix)
+- Оживление фото: простая анимация или нейро (SVD)
+- Апскейл, улучшение резкости
 
-## Быстрый старт
+## Установка
 
 ```bash
 cd local-faceswap
 python -m venv venv
-venv\Scripts\activate          # Windows
-# source venv/bin/activate     # Linux/macOS
+venv\Scripts\activate
 
 pip install -r requirements.txt
 python download_models.py
 python app/main.py
 ```
 
-http://127.0.0.1:7860
+### Редактор и нейро-анимация (опционально)
 
-## Несколько лиц
+```bash
+pip install -r requirements-extra.txt
+```
 
-1. Снимите «Один источник на все лица»
-2. Загрузите фото A / B / C
-3. Укажите индекс лица на цели (кнопка «Найти лица»)
-4. Пример: A→0, B→1
+При первом использовании модели скачаются сами (~5–10 GB).
 
-## Видео
+## Вкладки
 
-- Выберите отрезок слайдерами
-- «Детекция каждые N кадров»: 2–3 = быстрее, 1 = точнее
-- Результат сохраняется в `outputs/` и показывается в превью
+| Вкладка | Что делает |
+|---------|------------|
+| Фото | Замена лиц, до 3 источников |
+| Видео | Замена на отрезке, превью в outputs/ |
+| Редактор | `add sunglasses`, `make smile` и т.п. |
+| Оживить фото | Zoom/Pan сразу; SVD при наличии GPU |
 
 ## GPU
 
-Сейчас часто падает загрузка CUDA DLL (error 126) → работа на CPU (медленно).
-
-Проверка:
-```bash
-python -c "import onnxruntime as ort; print(ort.get_available_providers())"
-```
-
-Нужен рабочий `CUDAExecutionProvider` без error 126 при запуске.
-При CPU 15 сек видео может занимать десятки минут — это нормально без GPU.
+Для скорости face-swap и для SVD нужна рабочая CUDA.
+Если `CUDAExecutionProvider` не грузится (error 126) — всё идёт на CPU.
 
 ## Структура
 
 ```
 local-faceswap/
 ├── app/
+│   ├── main.py
+│   ├── swapper.py
+│   ├── editor.py
+│   ├── animator.py
+│   └── utils.py
 ├── models/
 ├── outputs/
-├── download_models.py
-└── requirements.txt
+├── requirements.txt
+├── requirements-extra.txt
+└── download_models.py
 ```

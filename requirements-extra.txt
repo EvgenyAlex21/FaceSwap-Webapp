@@ -1,0 +1,6 @@
+# Опционально: редактор по тексту + нейро-анимация (SVD)
+# pip install -r requirements-extra.txt
+diffusers>=0.30.0
+transformers>=4.44.0
+accelerate>=0.33.0
+torch>=2.2.0
