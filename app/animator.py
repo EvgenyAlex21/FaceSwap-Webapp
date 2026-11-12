@@ -1,4 +1,4 @@
-"""Оживление фото → видео. SVD или простая 2.5D анимация."""
+"""Оживление фото → видео."""
 
 from __future__ import annotations
 
@@ -6,9 +6,29 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .utils import OUTPUTS, unique_name, create_video_writer
+from .utils import OUTPUTS, unique_name, create_video_writer, make_browser_compatible
 
 _svd_pipe = None
+
+
+def _torch_cuda_ok() -> tuple[bool, str]:
+    try:
+        import torch
+    except ImportError:
+        return False, "PyTorch не установлен. pip install torch"
+    if not torch.cuda.is_available():
+        return False, (
+            "PyTorch не видит CUDA (установлена CPU-сборка torch).\n"
+            "Для SVD нужен torch с CUDA, например:\n"
+            "  pip install torch --index-url https://download.pytorch.org/whl/cu124\n"
+            "Либо используйте Zoom in / Pan — они работают сразу."
+        )
+    try:
+        x = torch.zeros(1, device="cuda")
+        del x
+        return True, f"PyTorch CUDA OK ({torch.cuda.get_device_name(0)})"
+    except Exception as e:
+        return False, f"PyTorch CUDA error: {e}"
 
 
 def animate_svd(
@@ -18,37 +38,41 @@ def animate_svd(
     motion_bucket_id: int = 80,
     noise_aug_strength: float = 0.02,
     seed: int = 0,
-    prefer_cuda: bool = True,
     progress_callback=None,
 ) -> Path:
     import torch
     from PIL import Image
 
-    device = "cuda" if prefer_cuda and torch.cuda.is_available() else "cpu"
-    if device == "cpu":
-        raise RuntimeError(
-            "Stable Video Diffusion практически не работает на CPU.\n"
-            "Нужна рабочая NVIDIA CUDA. Пока используйте простую анимацию (Zoom in и т.п.)."
-        )
+    ok, msg = _torch_cuda_ok()
+    print(f"[Animator] {msg}")
+    if not ok:
+        raise RuntimeError(msg)
 
     global _svd_pipe
     if _svd_pipe is None:
-        from diffusers import StableVideoDiffusionPipeline
+        try:
+            from diffusers import StableVideoDiffusionPipeline
+        except ImportError:
+            raise RuntimeError(
+                "Нужен пакет diffusers:\n  pip install diffusers transformers accelerate"
+            )
         model_id = "stabilityai/stable-video-diffusion-img2vid-xt"
         if progress_callback:
-            progress_callback(0.05, "Загрузка SVD...")
+            progress_callback(0.05, "Загрузка SVD (~10 GB при первом запуске)...")
+        print(f"[Animator] Загрузка {model_id}...")
         pipe = StableVideoDiffusionPipeline.from_pretrained(
             model_id, torch_dtype=torch.float16, variant="fp16",
         )
-        pipe = pipe.to(device)
+        # 3050 4GB — лучше offload
         try:
             pipe.enable_model_cpu_offload()
         except Exception:
-            pass
+            pipe = pipe.to("cuda")
         _svd_pipe = pipe
+        print("[Animator] SVD загружен")
 
     if progress_callback:
-        progress_callback(0.2, "Генерация кадров...")
+        progress_callback(0.2, "Генерация кадров SVD...")
 
     rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
     pil = Image.fromarray(rgb).convert("RGB").resize((1024, 576), Image.LANCZOS)
@@ -56,7 +80,7 @@ def animate_svd(
 
     frames = _svd_pipe(
         pil,
-        decode_chunk_size=8,
+        decode_chunk_size=4,
         generator=generator,
         motion_bucket_id=int(motion_bucket_id),
         noise_aug_strength=float(noise_aug_strength),
@@ -64,18 +88,19 @@ def animate_svd(
     ).frames[0]
 
     if progress_callback:
-        progress_callback(0.85, "Сохранение видео...")
+        progress_callback(0.85, "Сохранение и перекодирование...")
 
-    out_path = OUTPUTS / unique_name("anim_svd", ".mp4")
-    writer, out_path, w, h = create_video_writer(out_path, 1024, 576, fps)
+    raw_path = OUTPUTS / unique_name("anim_svd", ".mp4")
+    writer, raw_path, w, h = create_video_writer(raw_path, 1024, 576, fps)
     for fr in frames:
         bgr = cv2.cvtColor(np.array(fr), cv2.COLOR_RGB2BGR)
         writer.write(bgr)
     writer.release()
 
+    out = make_browser_compatible(raw_path)
     if progress_callback:
         progress_callback(1.0, "Готово")
-    return out_path
+    return out
 
 
 def animate_simple(
@@ -90,8 +115,8 @@ def animate_simple(
     image_bgr = cv2.resize(image_bgr, (w, h))
     total = max(8, int(seconds * fps))
 
-    out_path = OUTPUTS / unique_name("anim_simple", ".mp4")
-    writer, out_path, w, h = create_video_writer(out_path, w, h, fps)
+    raw_path = OUTPUTS / unique_name("anim_simple", ".mp4")
+    writer, raw_path, w, h = create_video_writer(raw_path, w, h, fps)
 
     scale_max = 1.18 if mode in ("zoom_in", "zoom_out") else 1.12
     big = cv2.resize(image_bgr, (int(w * scale_max), int(h * scale_max)), interpolation=cv2.INTER_LANCZOS4)
@@ -128,6 +153,7 @@ def animate_simple(
             progress_callback(i / total, f"Кадр {i}/{total}")
 
     writer.release()
+    out = make_browser_compatible(raw_path)
     if progress_callback:
         progress_callback(1.0, "Готово")
-    return out_path
+    return out

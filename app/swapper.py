@@ -15,7 +15,7 @@ from insightface.model_zoo import get_model
 from .utils import (
     MODELS, read_image, write_image, get_video_info,
     create_video_writer, OUTPUTS, unique_name,
-    upscale_image, enhance_face_region,
+    upscale_image, enhance_face_region, make_browser_compatible,
 )
 from .gpu_utils import get_providers, get_device_name
 
@@ -242,7 +242,9 @@ class FaceSwapper:
             cap.release()
             writer.release()
 
-        print(f"[FaceSwapper] Видео готово: {out_path}")
+        print(f"[FaceSwapper] Сырое видео: {out_path}")
+        out_path = make_browser_compatible(out_path)
+        print(f"[FaceSwapper] Видео для превью: {out_path}")
         return out_path
 
 

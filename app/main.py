@@ -197,11 +197,13 @@ def run_edit(image, prompt, steps, image_guidance, guidance, seed,
         raise gr.Error(str(e))
 
 
-def run_animate(image, mode, seconds, svd_frames, motion, seed,
+def run_animate(image, mode, prompt, seconds, svd_frames, motion, seed,
                 progress=gr.Progress(track_tqdm=False)):
     if image is None:
         raise gr.Error("Загрузите фото")
     bgr = _to_bgr(image)
+    if prompt:
+        print(f"[Animator] Промпт: {prompt}")
 
     def cb(p, msg=""):
         progress(p, desc=msg or "Анимация...")
@@ -224,7 +226,9 @@ def run_animate(image, mode, seconds, svd_frames, motion, seed,
                 bgr, seconds=float(seconds), fps=24, mode=simple_mode,
                 progress_callback=cb,
             )
-        return str(path), str(path)
+        # Gradio лучше подхватывает абсолютный путь
+        path = str(Path(path).resolve())
+        return path, path
     except Exception as e:
         raise gr.Error(str(e))
 
@@ -385,6 +389,11 @@ def build_ui():
                     ["Zoom in", "Zoom out", "Pan right", "Pan left", "Pulse", "Нейро (SVD) — нужен GPU"],
                     value="Zoom in", label="Режим",
                 )
+                anim_prompt = gr.Textbox(
+                    label="Описание движения (опционально)",
+                    placeholder="например: slow zoom to face, camera pans right...",
+                    lines=2,
+                )
                 with gr.Row():
                     anim_sec = gr.Slider(1, 8, value=3, step=0.5, label="Сек (простая)")
                     anim_frames = gr.Slider(10, 25, value=14, step=1, label="Кадров SVD")
@@ -392,7 +401,7 @@ def build_ui():
                     anim_seed = gr.Number(value=0, label="Seed", precision=0)
                 btn_anim = gr.Button("🎥 Оживить", variant="primary", elem_classes=["primary-btn"], size="lg")
                 anim_path = gr.Textbox(label="Файл", interactive=False)
-                btn_anim.click(run_animate, [anim_in, anim_mode, anim_sec, anim_frames, anim_motion, anim_seed], [anim_out, anim_path])
+                btn_anim.click(run_animate, [anim_in, anim_mode, anim_prompt, anim_sec, anim_frames, anim_motion, anim_seed], [anim_out, anim_path])
 
         gr.HTML("""
         <div class="tips">

@@ -1,6 +1,7 @@
 from pathlib import Path
 import uuid
 import shutil
+import subprocess
 import cv2
 import numpy as np
 
@@ -49,12 +50,7 @@ def get_video_info(path: str | Path):
 
 
 def create_video_writer(path: str | Path, width: int, height: int, fps: float):
-    """
-    На Windows надёжнее всего mp4v (mpeg4).
-    H264/avc1 часто требуют openh264 DLL и падают с error.
-    """
     path = Path(path)
-    # Ширина/высота должны быть чётными для многих кодеков
     width = int(width) // 2 * 2
     height = int(height) // 2 * 2
     fps = float(fps) if fps and fps > 1 else 25.0
@@ -62,16 +58,58 @@ def create_video_writer(path: str | Path, width: int, height: int, fps: float):
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(str(path), fourcc, fps, (width, height))
     if not writer.isOpened():
-        # Fallback XVID in avi
         path = path.with_suffix(".avi")
         fourcc = cv2.VideoWriter_fourcc(*"XVID")
         writer = cv2.VideoWriter(str(path), fourcc, fps, (width, height))
     if not writer.isOpened():
-        raise RuntimeError(
-            "Не удалось создать VideoWriter. "
-            "Попробуйте другое разрешение или переустановите opencv-python-headless."
-        )
+        raise RuntimeError("Не удалось создать VideoWriter")
     return writer, path, width, height
+
+
+def make_browser_compatible(video_path: str | Path) -> Path:
+    """
+    Перекодирует видео в H.264 + yuv420p для превью в браузере.
+    mp4v часто не играет в Chrome — поэтому нужен этот шаг.
+    """
+    video_path = Path(video_path)
+    out_path = video_path.with_name(video_path.stem + "_preview.mp4")
+
+    # 1) imageio-ffmpeg (есть в requirements)
+    try:
+        import imageio_ffmpeg
+        ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        cmd = [
+            ffmpeg, "-y", "-i", str(video_path),
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            "-an",
+            str(out_path),
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        if r.returncode == 0 and out_path.exists() and out_path.stat().st_size > 1000:
+            print(f"[Video] Превью H.264: {out_path}")
+            return out_path
+        print(f"[Video] ffmpeg exit {r.returncode}: {r.stderr[-500:] if r.stderr else ''}")
+    except Exception as e:
+        print(f"[Video] imageio-ffmpeg: {e}")
+
+    # 2) системный ffmpeg
+    try:
+        cmd = [
+            "ffmpeg", "-y", "-i", str(video_path),
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-an",
+            str(out_path),
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        if r.returncode == 0 and out_path.exists() and out_path.stat().st_size > 1000:
+            return out_path
+    except Exception as e:
+        print(f"[Video] system ffmpeg: {e}")
+
+    print("[Video] H.264 не удался — отдаём оригинал (может не играть в браузере)")
+    return video_path
 
 
 def upscale_image(img: np.ndarray, scale: int = 2) -> np.ndarray:
