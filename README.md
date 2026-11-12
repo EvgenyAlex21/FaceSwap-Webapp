@@ -1,29 +1,29 @@
 # Local Face Swap
 
 <p align="center">
-  <b>Fully local face swap for photos &amp; videos</b><br>
-  Multi-face · Audio preserved · Quality presets · Optional AI editor &amp; animation
+  <b>Полностью локальная замена лиц на фото и видео</b><br>
+  Несколько лиц · Сохранение звука · Пресеты качества · Опциональный AI-редактор и анимация
 </p>
 
 ---
 
-## Features
+## Возможности
 
-| Feature | Description |
+| Функция | Описание |
 |--------|-------------|
-| **Photo face swap** | One or multiple source faces mapped to target faces |
-| **Video face swap** | Frame-by-frame swap with start/end range |
-| **Audio** | Original soundtrack is merged back after processing |
-| **Quality controls** | Detection size, enhance strength, upscale, video CRF |
-| **GPU / CPU** | Uses NVIDIA CUDA when available; falls back to CPU with clear logs |
-| **Editor** | Text instructions via InstructPix2Pix *(optional)* |
-| **Animate** | Ken Burns zoom/pan or Stable Video Diffusion *(optional)* |
+| **Замена лиц на фото** | Одно или несколько исходных лиц на целевые |
+| **Замена лиц на видео** | Покадровая замена с указанием диапазона кадров |
+| **Звук** | Оригинальная звуковая дорожка сохраняется после обработки |
+| **Настройки качества** | Размер детекции, сила улучшения, апскейл, CRF видео |
+| **GPU / CPU** | Использует NVIDIA CUDA при наличии; иначе переключается на CPU с понятными логами |
+| **Редактор** | Текстовые инструкции через InstructPix2Pix *(опционально)* |
+| **Анимация** | Ken Burns (зум/панорамирование) или Stable Video Diffusion *(опционально)* |
 
-All processing runs **offline** after models are downloaded. No cloud API, no watermarks, no usage limits.
+Вся обработка выполняется **офлайн** после загрузки моделей. Нет облачных API, водяных знаков и лимитов использования.
 
 ---
 
-## Quick start
+## Быстрый старт
 
 ```bash
 git clone <your-repo-url> local-faceswap
@@ -42,63 +42,63 @@ python download_models.py
 python app/main.py
 ```
 
-Open **http://127.0.0.1:7860**
+Откройте **http://127.0.0.1:7860**
 
 ---
 
-## Recommended quality settings
+## Рекомендуемые настройки качества
 
-For best visual results (slower):
+Для лучшего визуального результата (медленнее):
 
-| Setting | Value |
+| Параметр | Значение |
 |--------|--------|
-| Face detection | **Качественный (640)** or **Максимум (800)** |
-| Sharpening | **Среднее** or **Сильное** |
-| Upscale | **HD 2x** if source is small |
-| Video quality | **Высокое (CRF 18)** or **Хорошее (CRF 20)** |
-| Detect every N frames | **1** (every frame) |
-| Keep audio | **On** |
+| Детекция лиц | **Качественный (640)** или **Максимум (800)** |
+| Резкость | **Среднее** или **Сильное** |
+| Апскейл | **HD 2x**, если исходник маленький |
+| Качество видео | **Высокое (CRF 18)** или **Хорошее (CRF 20)** |
+| Детектировать каждые N кадров | **1** (каждый кадр) |
+| Сохранять звук | **Вкл** |
 
-For speed:
+Для скорости:
 
-- Detection **480** or **320**
-- Detect every **2–3** frames  
+- Детекция **480** или **320**
+- Детектировать каждые **2–3** кадра  
 - CRF **23–26**
 
 ---
 
-## NVIDIA GPU setup (Windows)
+## Настройка NVIDIA GPU (Windows)
 
-Face-swap uses **onnxruntime-gpu**. You need CUDA 12 runtime + cuDNN 9:
+Замена лиц использует **onnxruntime-gpu**. Нужны CUDA 12 runtime + cuDNN 9:
 
 ```bash
 pip install onnxruntime-gpu==1.20.2
 pip install nvidia-cublas-cu12 nvidia-cuda-runtime-cu12 nvidia-cudnn-cu12 nvidia-cuda-nvrtc-cu12
 ```
 
-Check:
+Проверка:
 
 ```bash
 python -c "import onnxruntime as ort; print(ort.get_available_providers())"
 python app/main.py
 ```
 
-Console should show:
+В консоли должно появиться:
 
 ```text
 [GPU] CUDA: OK — face-swap на видеокарте
 ```
 
-### Common GPU issues (from real runs)
+### Типичные проблемы с GPU (из реальных запусков)
 
-**1. `LoadLibrary failed with error 126` / CUDA falls back to CPU**  
-- Missing cuDNN or CUDA DLLs.  
-- Fix: reinstall `nvidia-cudnn-cu12` and related packages (see above).  
-- Do **not** remove `nvidia-cudnn-cu12` if you need ORT CUDA.
+**1. `LoadLibrary failed with error 126` / CUDA переключается на CPU**  
+- Отсутствуют cuDNN или CUDA DLL.  
+- Решение: переустановите `nvidia-cudnn-cu12` и связанные пакеты (см. выше).  
+- **Не удаляйте** `nvidia-cudnn-cu12`, если нужен CUDA для ORT.
 
-**2. `CUDA: OK` then after reinstalling torch → CUDA broken again**  
-- Often PATH / DLL order conflict between pip `nvidia-*` and PyTorch.  
-- This project uses `os.add_dll_directory` and avoids polluting `PATH` so ORT and Torch can coexist better.
+**2. `CUDA: OK`, но после переустановки torch CUDA снова ломается**  
+- Часто конфликт порядка PATH / DLL между pip-пакетами `nvidia-*` и PyTorch.  
+- Проект использует `os.add_dll_directory` и не засоряет `PATH`, чтобы ORT и Torch лучше уживались вместе.
 
 **3. Torch: `Error loading cudnn_cnn64_9.dll` (WinError 127)**  
 ```bash
@@ -106,58 +106,58 @@ pip uninstall torch torchvision torchaudio nvidia-cudnn-cu12 -y
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 pip install nvidia-cudnn-cu12
 ```
-Then verify:
+Затем проверьте:
 ```bash
 python -c "import torch; print(torch.cuda.is_available())"
 ```
 
-**4. Video has no sound**  
-- Fixed in current version: audio is copied from the source with ffmpeg (`imageio-ffmpeg`).  
-- Keep the **«Сохранять звук»** checkbox enabled.
+**4. В видео нет звука**  
+- Исправлено в текущей версии: звук копируется из исходника через ffmpeg (`imageio-ffmpeg`).  
+- Оставляйте включённым чекбокс **«Сохранять звук»**.
 
-**5. Preview empty in browser, file downloads fine**  
-- Browser needs H.264 (`yuv420p`). Output is re-encoded for preview.  
-- Files are always under `outputs/`.
+**5. Превью в браузере пустое, файл скачивается нормально**  
+- Браузеру нужен H.264 (`yuv420p`). Выход перекодируется для превью.  
+- Файлы всегда лежат в `outputs/`.
 
-**6. OpenH264 / VideoWriter errors**  
-- Writer uses `mp4v`, then ffmpeg remuxes to H.264 — avoids OpenH264 DLL issues on Windows.
+**6. Ошибки OpenH264 / VideoWriter**  
+- Writer использует `mp4v`, затем ffmpeg перепаковывает в H.264 — это обходит проблемы с OpenH264 DLL на Windows.
 
-**7. 15s video takes ~40 minutes**  
-- That was CPU mode. With working CUDA it should be much faster.  
-- Also use detect every 2–3 frames for draft runs.
+**7. 15-секундное видео обрабатывается ~40 минут**  
+- Это был режим CPU. С рабочей CUDA должно быть значительно быстрее.  
+- Для черновых прогонов используйте детекцию каждые 2–3 кадра.
 
-**8. SVD / Editor need PyTorch CUDA**  
-- Separate from onnxruntime. Install Torch with CUDA (cu124 wheel above).  
-- RTX 3050 4GB may OOM on full SVD — use Zoom/Pan modes instead.
+**8. SVD / Редактор требуют PyTorch CUDA**  
+- Это отдельно от onnxruntime. Установите Torch с CUDA (колесо cu124 выше).  
+- На RTX 3050 4GB может не хватить VRAM для полного SVD — используйте режимы Zoom/Pan.
 
 ---
 
-## Optional: Editor & neural animation
+## Опционально: Редактор и нейросетевая анимация
 
 ```bash
 pip install -r requirements-extra.txt
 ```
 
-- **Editor** — InstructPix2Pix (`add sunglasses`, `make the person smile`, …)  
-- **Animate → SVD** — needs GPU + enough VRAM  
+- **Редактор** — InstructPix2Pix (`add sunglasses`, `make the person smile`, …)  
+- **Анимация → SVD** — нужна GPU + достаточно VRAM  
 
-Simple Zoom/Pan animation works **without** extra packages.
+Простая анимация Zoom/Pan работает **без** дополнительных пакетов.
 
 ---
 
-## Project layout
+## Структура проекта
 
 ```text
 local-faceswap/
 ├── app/
 │   ├── main.py          # Gradio UI
-│   ├── swapper.py       # Face swap core
-│   ├── gpu_utils.py     # CUDA detection & fallback
-│   ├── editor.py        # InstructPix2Pix (optional)
-│   ├── animator.py      # SVD / simple motion
-│   └── utils.py         # I/O, audio merge, H.264
-├── models/              # Downloaded weights (gitignored)
-├── outputs/             # Results (gitignored)
+│   ├── swapper.py       # Ядро замены лиц
+│   ├── gpu_utils.py     # Детекция CUDA и fallback
+│   ├── editor.py        # InstructPix2Pix (опционально)
+│   ├── animator.py      # SVD / простая анимация
+│   └── utils.py         # I/O, склейка звука, H.264
+├── models/              # Скачанные веса (в .gitignore)
+├── outputs/             # Результаты (в .gitignore)
 ├── download_models.py
 ├── requirements.txt
 ├── requirements-extra.txt
@@ -167,38 +167,38 @@ local-faceswap/
 
 ---
 
-## How multi-face mapping works
+## Как работает сопоставление нескольких лиц
 
-1. Uncheck **«Один источник на все лица»**  
-2. Upload source photos A / B / C  
-3. Click **Найти лица** on the target to see indices  
-4. Map e.g. A→0, B→1  
-
----
-
-## License & models
-
-- App code: use freely for personal / research projects.  
-- **InsightFace / InSwapper** and other weights have their own licenses — check before commercial use.  
-- InstructPix2Pix & SVD: see model cards on Hugging Face.
+1. Снимите галочку **«Один источник на все лица»**  
+2. Загрузите исходные фото A / B / C  
+3. Нажмите **Найти лица** на целевом изображении, чтобы увидеть индексы  
+4. Сопоставьте, например: A→0, B→1  
 
 ---
 
-## Troubleshooting checklist
+## Лицензия и модели
+
+- Код приложения: свободно для личных и исследовательских проектов.  
+- **InsightFace / InSwapper** и другие веса имеют собственные лицензии — проверяйте перед коммерческим использованием.  
+- InstructPix2Pix и SVD: смотрите карточки моделей на Hugging Face.
+
+---
+
+## Чек-лист диагностики
 
 ```bash
-# Providers
+# Провайдеры
 python -c "import onnxruntime as ort; print(ort.__version__, ort.get_available_providers())"
 
 # Torch CUDA
 python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 
-# GPU visible?
+# Видна ли GPU?
 nvidia-smi
 ```
 
-If CUDA is listed but inactive, read the `[GPU] ---- ОТЛАДКА ----` block printed at startup — it explains the failure reason.
+Если CUDA в списке есть, но не активна — смотрите блок `[GPU] ---- ОТЛАДКА ----` при запуске: там объясняется причина сбоя.
 
 ---
 
-Built for **local**, **private**, **unlimited** face swapping with practical quality and audio support.
+Сделано для **локальной**, **приватной** и **неограниченной** замены лиц с практичным качеством и поддержкой звука.
