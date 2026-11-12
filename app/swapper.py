@@ -1,5 +1,5 @@
 """
-Ядро face-swap на InsightFace + InSwapper.
+Ядро face-swap. Оптимизировано, без шума TensorRT.
 """
 
 from __future__ import annotations
@@ -12,17 +12,19 @@ import numpy as np
 from insightface.app import FaceAnalysis
 from insightface.model_zoo import get_model
 
-from .utils import MODELS, read_image, write_image, get_video_info, create_video_writer, OUTPUTS, unique_name
+from .utils import (
+    MODELS, read_image, write_image, get_video_info,
+    create_video_writer, OUTPUTS, unique_name,
+    upscale_image, enhance_face_region,
+)
 
 
 def _get_providers():
-    """Приоритет: CUDA → TensorRT → CPU"""
-    providers = []
+    """Только CUDA + CPU. TensorRT отключён — меньше ошибок в консоли."""
     try:
         import onnxruntime as ort
         available = ort.get_available_providers()
-        if "TensorrtExecutionProvider" in available:
-            providers.append("TensorrtExecutionProvider")
+        providers = []
         if "CUDAExecutionProvider" in available:
             providers.append(
                 (
@@ -30,23 +32,23 @@ def _get_providers():
                     {
                         "device_id": 0,
                         "arena_extend_strategy": "kNextPowerOfTwo",
-                        "gpu_mem_limit": 4 * 1024 * 1024 * 1024,  # 4 GB
-                        "cudnn_conv_algo_search": "EXHAUSTIVE",
+                        "gpu_mem_limit": 6 * 1024 * 1024 * 1024,
+                        "cudnn_conv_algo_search": "DEFAULT",
                         "do_copy_in_default_stream": True,
                     },
                 )
             )
         providers.append("CPUExecutionProvider")
+        return providers
     except Exception:
-        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-    return providers
+        return ["CPUExecutionProvider"]
 
 
 class FaceSwapper:
-    def __init__(self, det_size: Tuple[int, int] = (640, 640)):
+    def __init__(self, det_size: Tuple[int, int] = (480, 480)):
         self.providers = _get_providers()
         self.det_size = det_size
-        self.app: Optional[FaceAnalysis] = None
+        self.app = None
         self.swapper = None
         self._initialized = False
 
@@ -55,29 +57,27 @@ class FaceSwapper:
             return
 
         print("[FaceSwapper] Загрузка моделей...")
-        print(f"[FaceSwapper] Providers: {[p[0] if isinstance(p, tuple) else p for p in self.providers]}")
+        prov_names = [p[0] if isinstance(p, tuple) else p for p in self.providers]
+        print(f"[FaceSwapper] Providers: {prov_names}")
 
         self.app = FaceAnalysis(
             name="buffalo_l",
             root=str(MODELS.parent),
             providers=self.providers,
         )
-        # ctx_id=0 → GPU
         self.app.prepare(ctx_id=0, det_size=self.det_size)
 
         swapper_path = MODELS / "inswapper_128.onnx"
         if not swapper_path.exists():
             raise FileNotFoundError(
-                f"Модель {swapper_path} не найдена.\n"
-                "Запусти: python download_models.py"
+                f"Модель {swapper_path} не найдена.\nЗапусти: python download_models.py"
             )
 
         self.swapper = get_model(str(swapper_path), providers=self.providers)
         self._initialized = True
-        print("[FaceSwapper] Модели загружены (GPU).")
+        print("[FaceSwapper] Модели загружены.")
 
     def set_det_size(self, size: Tuple[int, int]):
-        """Меняет разрешение детектора (меньше = быстрее)."""
         if size != self.det_size:
             self.det_size = size
             if self.app is not None:
@@ -97,17 +97,14 @@ class FaceSwapper:
         self.initialize()
         faces = self.get_faces(img)
         preview = img.copy()
-
         for i, face in enumerate(faces):
             x1, y1, x2, y2 = map(int, face.bbox)
             cv2.rectangle(preview, (x1, y1), (x2, y2), (0, 255, 128), 2)
             label = str(i)
             (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
             cv2.rectangle(preview, (x1, y1 - th - 10), (x1 + tw + 8, y1), (0, 255, 128), -1)
-            cv2.putText(
-                preview, label, (x1 + 4, y1 - 6),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 2, cv2.LINE_AA
-            )
+            cv2.putText(preview, label, (x1 + 4, y1 - 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 2, cv2.LINE_AA)
         return preview, len(faces)
 
     def swap_image(
@@ -117,6 +114,9 @@ class FaceSwapper:
         source_face_index: int = 0,
         target_face_indices: Optional[List[int]] = None,
         swap_all: bool = True,
+        enhance: bool = False,
+        upscale: int = 1,
+        out_format: str = "jpg",
     ) -> Path:
         self.initialize()
 
@@ -135,15 +135,21 @@ class FaceSwapper:
             source_face_index = 0
 
         source_face = source_faces[source_face_index]
-        indices = list(range(len(target_faces))) if swap_all or target_face_indices is None else target_face_indices
+        indices = list(range(len(target_faces))) if swap_all or not target_face_indices else target_face_indices
 
         result = target_img.copy()
         for idx in indices:
             if 0 <= idx < len(target_faces):
                 result = self.swapper.get(result, target_faces[idx], source_face, paste_back=True)
 
-        out_path = OUTPUTS / unique_name("swap_img", ".jpg")
-        write_image(out_path, result)
+        if enhance:
+            result = enhance_face_region(result, strength=0.65)
+
+        if upscale > 1:
+            result = upscale_image(result, scale=upscale)
+
+        out_path = OUTPUTS / unique_name("swap_img", f".{out_format}")
+        write_image(out_path, result, fmt=out_format)
         return out_path
 
     def swap_video(
@@ -154,13 +160,11 @@ class FaceSwapper:
         target_face_indices: Optional[List[int]] = None,
         swap_all: bool = True,
         max_frames: Optional[int] = None,
-        detect_every_n: int = 1,
+        detect_every_n: int = 2,
+        enhance: bool = False,
+        upscale: int = 1,
         progress_callback=None,
     ) -> Path:
-        """
-        detect_every_n: детектировать лица каждые N кадров (1 = каждый кадр).
-        Больше значение = быстрее, но чуть менее точно при быстром движении.
-        """
         self.initialize()
 
         source_img = read_image(source_path)
@@ -176,8 +180,9 @@ class FaceSwapper:
         if max_frames:
             total_frames = min(total_frames, max_frames)
 
+        out_w, out_h = width * upscale, height * upscale
         out_path = OUTPUTS / unique_name("swap_vid", ".mp4")
-        writer = create_video_writer(out_path, width, height, fps)
+        writer = create_video_writer(out_path, out_w, out_h, fps)
 
         cap = cv2.VideoCapture(str(target_video_path))
         frame_idx = 0
@@ -189,7 +194,6 @@ class FaceSwapper:
                 if not ret:
                     break
 
-                # Детекция раз в N кадров — сильно ускоряет видео
                 if frame_idx % detect_every_n == 0 or not last_faces:
                     faces = self.get_faces(frame)
                     last_faces = faces
@@ -197,10 +201,16 @@ class FaceSwapper:
                     faces = last_faces
 
                 if faces:
-                    indices = list(range(len(faces))) if swap_all or target_face_indices is None else target_face_indices
+                    indices = list(range(len(faces))) if swap_all or not target_face_indices else target_face_indices
                     for idx in indices:
                         if 0 <= idx < len(faces):
                             frame = self.swapper.get(frame, faces[idx], source_face, paste_back=True)
+
+                if enhance:
+                    frame = enhance_face_region(frame, strength=0.5)
+
+                if upscale > 1:
+                    frame = upscale_image(frame, scale=upscale)
 
                 writer.write(frame)
                 frame_idx += 1
@@ -214,10 +224,10 @@ class FaceSwapper:
         return out_path
 
 
-_swapper: Optional[FaceSwapper] = None
+_swapper = None
 
 
-def get_swapper(det_size: Tuple[int, int] = (640, 640)) -> FaceSwapper:
+def get_swapper(det_size=(480, 480)):
     global _swapper
     if _swapper is None:
         _swapper = FaceSwapper(det_size=det_size)
