@@ -1,0 +1,14 @@
+gradio>=4.44.0
+insightface>=0.7.3
+onnxruntime-gpu>=1.19.0; platform_system != "Darwin"
+onnxruntime>=1.19.0; platform_system == "Darwin"
+opencv-python-headless>=4.10.0
+numpy>=1.26.0
+Pillow>=10.4.0
+imageio>=2.35.0
+imageio-ffmpeg>=0.5.1
+tqdm>=4.66.0
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+aiofiles>=24.1.0

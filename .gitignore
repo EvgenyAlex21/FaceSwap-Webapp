@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Models & outputs (large / generated)
+models/
+outputs/
+uploads/
+*.onnx
+*.pth
+*.pt
+*.safetensors
+
+# Gradio / temp
+flagged/
+.tmp/
+temp/
+*.tmp
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs & caches
+*.log
+.cache/
+huggingface/
+torch_cache/
+
+# Archives
+*.zip
+*.7z
