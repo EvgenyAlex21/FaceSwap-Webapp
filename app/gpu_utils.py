@@ -1,6 +1,6 @@
 """
-Диагностика и выбор устройства: NVIDIA CUDA → CPU.
-Подробный лог в консоль, если GPU недоступен.
+Диагностика CUDA для onnxruntime.
+Важно: не ломаем PyTorch — не засоряем PATH чужим cuDNN.
 """
 
 from __future__ import annotations
@@ -37,78 +37,61 @@ def _find_nvidia_dll_dirs() -> List[Path]:
     return dirs
 
 
-def add_nvidia_paths_to_dll_search():
-    """Windows: добавляем DLL-пути pip-пакетов nvidia-*."""
+def add_nvidia_dll_directories():
+    """
+    Windows: os.add_dll_directory — безопаснее, чем править PATH.
+    PATH не трогаем: иначе PyTorch может подхватить чужой cuDNN и упасть.
+    """
     if sys.platform != "win32":
         return
     dirs = _find_nvidia_dll_dirs()
     if not dirs:
-        _log("[GPU] nvidia-*/bin в site-packages не найдены")
-        _log("[GPU] Подсказка: pip install nvidia-cublas-cu12 nvidia-cuda-runtime-cu12 nvidia-cudnn-cu12 nvidia-cuda-nvrtc-cu12")
+        _log("[GPU] nvidia-*/bin не найдены. Для ORT CUDA: pip install nvidia-cudnn-cu12 nvidia-cublas-cu12 nvidia-cuda-runtime-cu12 nvidia-cuda-nvrtc-cu12")
         return
     for d in dirs:
         try:
             os.add_dll_directory(str(d))
-            _log(f"[GPU] + DLL dir: {d}")
+            _log(f"[GPU] + dll_directory: {d}")
         except Exception as e:
-            _log(f"[GPU] add_dll_directory fail: {d} ({e})")
-        os.environ["PATH"] = str(d) + os.pathsep + os.environ.get("PATH", "")
+            _log(f"[GPU] dll_directory fail: {d} ({e})")
 
 
 def _test_cuda_session() -> Tuple[bool, str]:
-    """
-    Реальная проверка CUDA EP.
-    Возвращает (ok, error_message).
-    """
     try:
         import onnxruntime as ort
     except Exception as e:
         return False, f"onnxruntime не импортируется: {e}"
 
-    # Пробуем на модели inswapper, если есть; иначе — только список провайдеров
     models_dir = Path(__file__).resolve().parent.parent / "models"
     model_path = models_dir / "inswapper_128.onnx"
-
     providers_try = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
     try:
-        if model_path.exists():
-            so = ort.SessionOptions()
-            so.log_severity_level = 3
-            sess = ort.InferenceSession(
-                str(model_path),
-                sess_options=so,
-                providers=providers_try,
-            )
-            active = sess.get_providers()
-            if "CUDAExecutionProvider" in active:
-                return True, ""
-            return False, f"Сессия создана, но CUDA не активен. Активные: {active}"
-        else:
-            # Модели ещё нет — проверяем, что провайдер хотя бы регистрируется
+        if not model_path.exists():
             avail = ort.get_available_providers()
             if "CUDAExecutionProvider" not in avail:
-                return False, "CUDAExecutionProvider отсутствует в get_available_providers()"
-            # Пробуем создать session options + provider options (лёгкий тест)
-            try:
-                # Некоторые сборки падают уже при GetProvider
-                from onnxruntime.capi import _pybind_state as C
-                # просто повторный available
-            except Exception:
-                pass
-            return False, (
-                "Модель models/inswapper_128.onnx ещё не скачана — "
-                "полный тест CUDA будет после python download_models.py. "
-                "Провайдер CUDA есть в списке, но LoadLibrary может упасть при загрузке модели."
-            )
+                return False, "CUDAExecutionProvider нет в списке провайдеров"
+            return False, "Модель inswapper ещё не скачана — полный тест после download_models.py"
+
+        so = ort.SessionOptions()
+        so.log_severity_level = 3
+        sess = ort.InferenceSession(
+            str(model_path),
+            sess_options=so,
+            providers=providers_try,
+        )
+        active = sess.get_providers()
+        if "CUDAExecutionProvider" in active:
+            return True, ""
+        return False, f"Сессия на CPU. Активные: {active}. Часто не хватает cuDNN 9: pip install nvidia-cudnn-cu12"
     except Exception as e:
         msg = f"{type(e).__name__}: {e}"
-        low = str(e).lower()
-        if "126" in str(e) or "loadlibrary" in low or "dll" in low:
+        if "126" in str(e) or "LoadLibrary" in str(e) or "cudnn" in str(e).lower():
             msg += (
-                "\n  Причина: Windows не нашёл зависимость CUDA (cublas/cudart/cudnn .dll).\n"
-                "  Решение 1: pip install nvidia-cublas-cu12 nvidia-cuda-runtime-cu12 nvidia-cudnn-cu12 nvidia-cuda-nvrtc-cu12\n"
-                "  Решение 2: установите CUDA Toolkit 12.x с сайта NVIDIA и добавьте bin в PATH\n"
-                "  Решение 3: перезапустите терминал после установки пакетов"
+                "\n  onnxruntime CUDA требует cuDNN 9 + CUDA 12 runtime.\n"
+                "  Выполните:\n"
+                "    pip install nvidia-cudnn-cu12 nvidia-cublas-cu12 nvidia-cuda-runtime-cu12 nvidia-cuda-nvrtc-cu12\n"
+                "  Не удаляйте nvidia-cudnn-cu12 — без него face-swap уходит на CPU."
             )
         return False, msg
 
@@ -116,10 +99,10 @@ def _test_cuda_session() -> Tuple[bool, str]:
 def setup_device(verbose: bool = True) -> Tuple[str, List[Any]]:
     if verbose:
         _log("=" * 60)
-        _log("[GPU] Диагностика (CUDA → CPU fallback)")
+        _log("[GPU] Диагностика onnxruntime (CUDA → CPU)")
         _log("=" * 60)
 
-    add_nvidia_paths_to_dll_search()
+    add_nvidia_dll_directories()
 
     if verbose:
         try:
@@ -131,11 +114,9 @@ def setup_device(verbose: bool = True) -> Tuple[str, List[Any]]:
             if r.returncode == 0 and r.stdout.strip():
                 _log(f"[GPU] nvidia-smi: {r.stdout.strip()}")
             else:
-                _log("[GPU] nvidia-smi: нет данных (драйвер не установлен?)")
-        except FileNotFoundError:
-            _log("[GPU] nvidia-smi не найден в PATH")
+                _log("[GPU] nvidia-smi: нет данных")
         except Exception as e:
-            _log(f"[GPU] nvidia-smi error: {e}")
+            _log(f"[GPU] nvidia-smi: {e}")
 
     try:
         import onnxruntime as ort
@@ -147,7 +128,13 @@ def setup_device(verbose: bool = True) -> Tuple[str, List[Any]]:
 
     ok, err = _test_cuda_session()
     if ok:
-        _log("[GPU] CUDA: OK — используем видеокарту")
+        _log("[GPU] CUDA: OK — face-swap на видеокарте")
+        # torch отдельно
+        try:
+            import torch
+            _log(f"[GPU] torch {torch.__version__}, cuda.is_available={torch.cuda.is_available()}")
+        except Exception as e:
+            _log(f"[GPU] torch: не загрузился ({e})")
         _log("=" * 60)
         providers = [
             (
@@ -164,12 +151,17 @@ def setup_device(verbose: bool = True) -> Tuple[str, List[Any]]:
         ]
         return "CUDA", providers
 
-    _log("[GPU] CUDA: НЕДОСТУПНА → fallback на CPU")
+    _log("[GPU] CUDA: НЕДОСТУПНА → face-swap на CPU")
     if err:
         _log("[GPU] ---- ОТЛАДКА ----")
         for line in err.splitlines():
             _log(f"[GPU] {line}")
         _log("[GPU] -----------------")
+    try:
+        import torch
+        _log(f"[GPU] torch {torch.__version__}, cuda.is_available={torch.cuda.is_available()}")
+    except Exception as e:
+        _log(f"[GPU] torch: {e}")
     _log("=" * 60)
     return "CPU", ["CPUExecutionProvider"]
 
