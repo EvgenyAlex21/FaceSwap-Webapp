@@ -337,7 +337,7 @@ def build_ui():
                         swap_all_video = gr.Checkbox(value=True, label="Заменить все лица автоматически")
                         tgt_idx_v = gr.Textbox(value="", label="Или конкретные индексы", placeholder="0,1")
                         max_sec = gr.Slider(0, 180, value=15, step=1, label="Макс. длина (сек), 0 = всё")
-                        detect_every = gr.Slider(1, 5, value=2, step=1, label="Детекция каждые N кадров")
+                        detect_every = gr.Slider(1, 5, value=1, step=1, label="Детекция каждые N кадров (1 = максимум точности)")
 
                 btn_swap_video = gr.Button("✨  Заменить лицо в видео", variant="primary", elem_classes=["primary-btn"], size="lg")
                 out_video = gr.Video(label="Результат")

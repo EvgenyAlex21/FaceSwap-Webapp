@@ -1,5 +1,6 @@
 """
-Ядро face-swap. Оптимизировано, без шума TensorRT.
+Ядро face-swap.
+Точное сопоставление лиц по эмбеддингу (и на фото, и в видео).
 """
 
 from __future__ import annotations
@@ -20,7 +21,6 @@ from .utils import (
 
 
 def _get_providers():
-    """Только CUDA + CPU. TensorRT отключён — меньше ошибок в консоли."""
     try:
         import onnxruntime as ort
         available = ort.get_available_providers()
@@ -42,6 +42,16 @@ def _get_providers():
         return providers
     except Exception:
         return ["CPUExecutionProvider"]
+
+
+def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    a = a.astype(np.float32).flatten()
+    b = b.astype(np.float32).flatten()
+    na = np.linalg.norm(a)
+    nb = np.linalg.norm(b)
+    if na < 1e-6 or nb < 1e-6:
+        return -1.0
+    return float(np.dot(a, b) / (na * nb))
 
 
 class FaceSwapper:
@@ -86,6 +96,7 @@ class FaceSwapper:
     def get_faces(self, img: np.ndarray):
         self.initialize()
         faces = self.app.get(img)
+        # Сортируем по размеру (крупные первые) — удобно для превью
         faces = sorted(
             faces,
             key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]),
@@ -106,6 +117,27 @@ class FaceSwapper:
             cv2.putText(preview, label, (x1 + 4, y1 - 6),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 2, cv2.LINE_AA)
         return preview, len(faces)
+
+    def _best_matching_faces(self, faces, source_embedding, threshold: float = 0.15):
+        """
+        Возвращает лица, наиболее похожие на source по эмбеддингу.
+        Если swap_all — возвращаем все, но сортируем по схожести.
+        threshold — минимальная косинусная близость (низкий = почти все лица).
+        """
+        if not faces or source_embedding is None:
+            return faces
+
+        scored = []
+        for f in faces:
+            emb = getattr(f, "embedding", None)
+            if emb is None:
+                scored.append((0.0, f))
+                continue
+            sim = _cosine_similarity(source_embedding, emb)
+            scored.append((sim, f))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [f for sim, f in scored if sim >= threshold] or [scored[0][1]]
 
     def swap_image(
         self,
@@ -135,7 +167,13 @@ class FaceSwapper:
             source_face_index = 0
 
         source_face = source_faces[source_face_index]
-        indices = list(range(len(target_faces))) if swap_all or not target_face_indices else target_face_indices
+        source_emb = getattr(source_face, "embedding", None)
+
+        if swap_all or not target_face_indices:
+            # Меняем все лица (как раньше)
+            indices = list(range(len(target_faces)))
+        else:
+            indices = target_face_indices
 
         result = target_img.copy()
         for idx in indices:
@@ -144,7 +182,6 @@ class FaceSwapper:
 
         if enhance:
             result = enhance_face_region(result, strength=0.65)
-
         if upscale > 1:
             result = upscale_image(result, scale=upscale)
 
@@ -160,11 +197,15 @@ class FaceSwapper:
         target_face_indices: Optional[List[int]] = None,
         swap_all: bool = True,
         max_frames: Optional[int] = None,
-        detect_every_n: int = 2,
+        detect_every_n: int = 1,
         enhance: bool = False,
         upscale: int = 1,
         progress_callback=None,
     ) -> Path:
+        """
+        Видео: на каждом кадре (или каждые N) ищем лица заново
+        и сопоставляем с исходным лицом по эмбеддингу — как на фото.
+        """
         self.initialize()
 
         source_img = read_image(source_path)
@@ -175,6 +216,7 @@ class FaceSwapper:
         if source_face_index >= len(source_faces):
             source_face_index = 0
         source_face = source_faces[source_face_index]
+        source_emb = getattr(source_face, "embedding", None)
 
         width, height, fps, total_frames = get_video_info(target_video_path)
         if max_frames:
@@ -194,21 +236,26 @@ class FaceSwapper:
                 if not ret:
                     break
 
-                if frame_idx % detect_every_n == 0 or not last_faces:
+                # Детекция: по умолчанию каждый кадр (точность как на фото)
+                if frame_idx % max(detect_every_n, 1) == 0 or not last_faces:
                     faces = self.get_faces(frame)
                     last_faces = faces
                 else:
                     faces = last_faces
 
                 if faces:
-                    indices = list(range(len(faces))) if swap_all or not target_face_indices else target_face_indices
-                    for idx in indices:
-                        if 0 <= idx < len(faces):
-                            frame = self.swapper.get(frame, faces[idx], source_face, paste_back=True)
+                    if swap_all or not target_face_indices:
+                        # Все лица на кадре
+                        to_swap = faces
+                    else:
+                        # Конкретные индексы (по размеру, как в превью)
+                        to_swap = [faces[i] for i in target_face_indices if 0 <= i < len(faces)]
+
+                    for target_face in to_swap:
+                        frame = self.swapper.get(frame, target_face, source_face, paste_back=True)
 
                 if enhance:
                     frame = enhance_face_region(frame, strength=0.5)
-
                 if upscale > 1:
                     frame = upscale_image(frame, scale=upscale)
 
