@@ -1,6 +1,4 @@
-"""
-Ядро face-swap. GPU по умолчанию, fallback CPU, подробный лог.
-"""
+"""Ядро face-swap. GPU/CPU, звук в видео, качество."""
 
 from __future__ import annotations
 
@@ -15,13 +13,14 @@ from insightface.model_zoo import get_model
 from .utils import (
     MODELS, read_image, write_image, get_video_info,
     create_video_writer, OUTPUTS, unique_name,
-    upscale_image, enhance_face_region, make_browser_compatible,
+    upscale_image, enhance_face_region,
+    make_browser_compatible, merge_audio,
 )
 from .gpu_utils import get_providers, get_device_name
 
 
 class FaceSwapper:
-    def __init__(self, det_size: Tuple[int, int] = (480, 480)):
+    def __init__(self, det_size: Tuple[int, int] = (640, 640)):
         self.providers = get_providers(verbose=True)
         self.det_size = det_size
         self.app = None
@@ -36,28 +35,19 @@ class FaceSwapper:
         prov_names = [p[0] if isinstance(p, tuple) else p for p in self.providers]
         print(f"[FaceSwapper] Providers: {prov_names}")
 
-        try:
-            self.app = FaceAnalysis(
-                name="buffalo_l",
-                root=str(MODELS.parent),
-                providers=self.providers,
-            )
-            self.app.prepare(ctx_id=0, det_size=self.det_size)
-        except Exception as e:
-            print(f"[FaceSwapper][ERROR] FaceAnalysis failed: {e}")
-            raise
+        self.app = FaceAnalysis(
+            name="buffalo_l",
+            root=str(MODELS.parent),
+            providers=self.providers,
+        )
+        self.app.prepare(ctx_id=0, det_size=self.det_size)
 
         swapper_path = MODELS / "inswapper_128.onnx"
         if not swapper_path.exists():
             raise FileNotFoundError(
                 f"Модель {swapper_path} не найдена.\nЗапусти: python download_models.py"
             )
-        try:
-            self.swapper = get_model(str(swapper_path), providers=self.providers)
-        except Exception as e:
-            print(f"[FaceSwapper][ERROR] InSwapper load failed: {e}")
-            raise
-
+        self.swapper = get_model(str(swapper_path), providers=self.providers)
         self._initialized = True
         print(f"[FaceSwapper] Модели загружены ({device}).")
 
@@ -105,6 +95,7 @@ class FaceSwapper:
         target_path,
         swap_all_with_first: bool = False,
         enhance: bool = False,
+        enhance_strength: float = 0.65,
         upscale: int = 1,
         out_format: str = "jpg",
         progress_callback=None,
@@ -140,16 +131,15 @@ class FaceSwapper:
                     result = self.swapper.get(result, target_faces[t_idx], src_face, paste_back=True)
 
         if progress_callback:
-            progress_callback(0.75, "Улучшение...")
+            progress_callback(0.75, "Улучшение / апскейл...")
 
-        if enhance:
-            result = enhance_face_region(result, strength=0.65)
+        if enhance and enhance_strength > 0:
+            result = enhance_face_region(result, strength=enhance_strength)
         if upscale > 1:
             result = upscale_image(result, scale=upscale)
 
         out_path = OUTPUTS / unique_name("swap_img", f".{out_format}")
         write_image(out_path, result, fmt=out_format)
-
         if progress_callback:
             progress_callback(1.0, "Готово")
         return out_path
@@ -161,9 +151,12 @@ class FaceSwapper:
         swap_all_with_first: bool = False,
         start_sec: float = 0.0,
         end_sec: float = 0.0,
-        detect_every_n: int = 2,
+        detect_every_n: int = 1,
         enhance: bool = False,
+        enhance_strength: float = 0.45,
         upscale: int = 1,
+        video_crf: int = 20,
+        keep_audio: bool = True,
         progress_callback=None,
     ) -> Path:
         self.initialize()
@@ -186,12 +179,12 @@ class FaceSwapper:
         if frames_to_process == 0:
             raise ValueError("Пустой отрезок видео")
 
-        print(f"[FaceSwapper] Видео: {frames_to_process} кадров, device={get_device_name()}")
+        print(f"[FaceSwapper] Видео: {frames_to_process} кадров @ {fps:.1f}fps, device={get_device_name()}")
 
         out_w = (width * upscale) // 2 * 2
         out_h = (height * upscale) // 2 * 2
-        out_path = OUTPUTS / unique_name("swap_vid", ".mp4")
-        writer, out_path, out_w, out_h = create_video_writer(out_path, out_w, out_h, fps)
+        raw_path = OUTPUTS / unique_name("swap_vid", ".mp4")
+        writer, raw_path, out_w, out_h = create_video_writer(raw_path, out_w, out_h, fps)
 
         cap = cv2.VideoCapture(str(target_video_path))
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
@@ -222,36 +215,47 @@ class FaceSwapper:
                                 src_face = source_cache[(str(src_path), s_idx)]
                                 frame = self.swapper.get(frame, faces[t_idx], src_face, paste_back=True)
 
-                if enhance:
-                    frame = enhance_face_region(frame, strength=0.4)
+                if enhance and enhance_strength > 0:
+                    frame = enhance_face_region(frame, strength=enhance_strength)
                 if upscale > 1:
                     frame = upscale_image(frame, scale=upscale)
-
                 if frame.shape[1] != out_w or frame.shape[0] != out_h:
-                    frame = cv2.resize(frame, (out_w, out_h))
+                    frame = cv2.resize(frame, (out_w, out_h), interpolation=cv2.INTER_LANCZOS4)
 
                 writer.write(frame)
                 frame_idx += 1
 
                 if progress_callback and (frame_idx % 3 == 0 or frame_idx == frames_to_process):
                     progress_callback(
-                        min(frame_idx / frames_to_process, 1.0),
+                        min(frame_idx / frames_to_process * 0.85, 0.85),
                         f"Кадр {frame_idx}/{frames_to_process}",
                     )
         finally:
             cap.release()
             writer.release()
 
-        print(f"[FaceSwapper] Сырое видео: {out_path}")
-        out_path = make_browser_compatible(out_path)
-        print(f"[FaceSwapper] Видео для превью: {out_path}")
-        return out_path
+        if progress_callback:
+            progress_callback(0.88, "Кодирование H.264...")
+
+        # H.264
+        video = make_browser_compatible(raw_path, crf=int(video_crf), preset="fast")
+
+        # Звук
+        if keep_audio:
+            if progress_callback:
+                progress_callback(0.94, "Добавление звука...")
+            video = merge_audio(video, target_video_path, start_sec=start_sec, end_sec=end_sec)
+
+        if progress_callback:
+            progress_callback(1.0, "Готово")
+        print(f"[FaceSwapper] Итог: {video}")
+        return Path(video)
 
 
 _swapper = None
 
 
-def get_swapper(det_size=(480, 480)):
+def get_swapper(det_size=(640, 640)):
     global _swapper
     if _swapper is None:
         _swapper = FaceSwapper(det_size=det_size)

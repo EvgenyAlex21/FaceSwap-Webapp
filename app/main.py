@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local Face Swap + Editor + Animation"""
+"""Local Face Swap — фото/видео, звук, качество, редактор, анимация."""
 
 from __future__ import annotations
 
@@ -18,15 +18,36 @@ from app.swapper import get_swapper
 from app.utils import OUTPUTS, unique_name, write_image, get_video_info
 
 
+# Детекция лиц
 DET_SIZES = {
-    "Быстрый (320)": (320, 320),
+    "Быстрый (320) — скорость": (320, 320),
     "Баланс (480)": (480, 480),
-    "Качественный (640)": (640, 640),
+    "Качественный (640) — рекомендуется": (640, 640),
+    "Максимум (800) — медленно": (800, 800),
 }
+
+# Апскейл
 UPSCALE_OPTS = {
     "Без апскейла (1x)": 1,
-    "HD (2x)": 2,
-    "Full HD / 4x": 4,
+    "HD 2x": 2,
+    "Full HD 4x": 4,
+}
+
+# Качество выходного видео (CRF: меньше = лучше)
+VIDEO_QUALITY = {
+    "Максимум (CRF 16)": 16,
+    "Высокое (CRF 18)": 18,
+    "Хорошее (CRF 20) — рекомендуется": 20,
+    "Среднее (CRF 23)": 23,
+    "Быстрое (CRF 26)": 26,
+}
+
+# Сила улучшения резкости
+ENHANCE_STRENGTH = {
+    "Выкл": 0.0,
+    "Слабое": 0.35,
+    "Среднее": 0.55,
+    "Сильное": 0.75,
 }
 
 
@@ -52,7 +73,7 @@ def _save_tmp(img, prefix="tmp"):
 
 
 def _apply_speed(speed_mode: str):
-    size = DET_SIZES.get(speed_mode, (480, 480))
+    size = DET_SIZES.get(speed_mode, (640, 640))
     sw = get_swapper()
     sw.set_det_size(size)
     return sw
@@ -102,11 +123,10 @@ def _build_source_map(src1, src2, src3, idx1, idx2, idx3, map1, map2, map3, sing
 
 
 def swap_photo(src1, src2, src3, idx1, idx2, idx3, map1, map2, map3,
-               target_img, single_mode, speed_mode, enhance, upscale_mode, out_format,
+               target_img, single_mode, speed_mode, enhance_mode, upscale_mode, out_format,
                progress=gr.Progress(track_tqdm=False)):
     if target_img is None:
         raise gr.Error("Загрузите целевое фото")
-
     progress(0.05, desc="Подготовка...")
     sw = _apply_speed(speed_mode)
     source_map, swap_all = _build_source_map(
@@ -114,6 +134,7 @@ def swap_photo(src1, src2, src3, idx1, idx2, idx3, map1, map2, map3,
     )
     tgt_path = _save_tmp(target_img, "tgt")
     upscale = UPSCALE_OPTS.get(upscale_mode, 1)
+    strength = ENHANCE_STRENGTH.get(enhance_mode, 0.55)
 
     def cb(p, msg=""):
         progress(p, desc=msg or "Обработка...")
@@ -121,11 +142,11 @@ def swap_photo(src1, src2, src3, idx1, idx2, idx3, map1, map2, map3,
     try:
         result_path = sw.swap_image(
             source_map=source_map, target_path=tgt_path,
-            swap_all_with_first=swap_all, enhance=enhance,
+            swap_all_with_first=swap_all,
+            enhance=strength > 0, enhance_strength=strength,
             upscale=upscale, out_format=out_format.lower(),
             progress_callback=cb,
         )
-        progress(1.0, desc="Готово")
         return _to_pil(cv2.imread(str(result_path))), str(result_path)
     except Exception as e:
         raise gr.Error(str(e))
@@ -148,17 +169,19 @@ def on_video_upload(video):
 
 def swap_video(src1, src2, src3, idx1, idx2, idx3, map1, map2, map3,
                target_video, single_mode, start_sec, end_sec,
-               speed_mode, detect_every, enhance, upscale_mode,
+               speed_mode, detect_every, enhance_mode, upscale_mode,
+               video_quality, keep_audio,
                progress=gr.Progress(track_tqdm=False)):
     if target_video is None:
         raise gr.Error("Загрузите видео")
-
     progress(0.02, desc="Подготовка...")
     sw = _apply_speed(speed_mode)
     source_map, swap_all = _build_source_map(
         src1, src2, src3, idx1, idx2, idx3, map1, map2, map3, single_mode
     )
     upscale = UPSCALE_OPTS.get(upscale_mode, 1)
+    strength = ENHANCE_STRENGTH.get(enhance_mode, 0.45)
+    crf = VIDEO_QUALITY.get(video_quality, 20)
 
     def cb(p, msg=""):
         progress(p, desc=msg or "Обработка видео...")
@@ -168,11 +191,13 @@ def swap_video(src1, src2, src3, idx1, idx2, idx3, map1, map2, map3,
             source_map=source_map, target_video_path=target_video,
             swap_all_with_first=swap_all,
             start_sec=float(start_sec or 0), end_sec=float(end_sec or 0),
-            detect_every_n=int(detect_every), enhance=enhance, upscale=upscale,
+            detect_every_n=int(detect_every),
+            enhance=strength > 0, enhance_strength=strength,
+            upscale=upscale, video_crf=crf, keep_audio=bool(keep_audio),
             progress_callback=cb,
         )
-        progress(1.0, desc="Готово")
-        return str(result_path), str(result_path)
+        path = str(Path(result_path).resolve())
+        return path, path
     except Exception as e:
         raise gr.Error(str(e))
 
@@ -182,8 +207,8 @@ def run_edit(image, prompt, steps, image_guidance, guidance, seed,
     if image is None:
         raise gr.Error("Загрузите фото")
     if not prompt or not str(prompt).strip():
-        raise gr.Error("Введите инструкцию, например: add sunglasses")
-    progress(0.1, desc="Загрузка модели / обработка...")
+        raise gr.Error("Введите инструкцию (на английском), например: add sunglasses")
+    progress(0.1, desc="Обработка...")
     try:
         from app.editor import edit_image
         path = edit_image(
@@ -226,7 +251,6 @@ def run_animate(image, mode, prompt, seconds, svd_frames, motion, seed,
                 bgr, seconds=float(seconds), fps=24, mode=simple_mode,
                 progress_callback=cb,
             )
-        # Gradio лучше подхватывает абсолютный путь
         path = str(Path(path).resolve())
         return path, path
     except Exception as e:
@@ -287,38 +311,59 @@ def build_ui():
         gr.HTML("""
         <div class="main-header">
             <h1>Local Face Swap</h1>
-            <p>Замена лиц · Редактор · Анимация · Индикатор прогресса</p>
+            <p>Замена лиц · Звук в видео · Выбор качества · Редактор · Анимация</p>
         </div>
         """)
 
-        with gr.Accordion("⚡ Скорость и качество", open=False):
+        with gr.Accordion("🎛 Качество и скорость", open=True):
             with gr.Row():
-                speed_mode = gr.Radio(list(DET_SIZES.keys()), value="Баланс (480)", label="Детекция")
-                upscale_mode = gr.Radio(list(UPSCALE_OPTS.keys()), value="Без апскейла (1x)", label="Апскейл")
-                enhance = gr.Checkbox(value=True, label="Улучшить резкость")
+                speed_mode = gr.Dropdown(
+                    list(DET_SIZES.keys()),
+                    value="Качественный (640) — рекомендуется",
+                    label="Детекция лиц",
+                    info="Выше = точнее и медленнее",
+                )
+                upscale_mode = gr.Dropdown(
+                    list(UPSCALE_OPTS.keys()),
+                    value="Без апскейла (1x)",
+                    label="Апскейл результата",
+                )
+                enhance_mode = gr.Dropdown(
+                    list(ENHANCE_STRENGTH.keys()),
+                    value="Среднее",
+                    label="Улучшение резкости",
+                )
+            with gr.Row():
+                video_quality = gr.Dropdown(
+                    list(VIDEO_QUALITY.keys()),
+                    value="Хорошее (CRF 20) — рекомендуется",
+                    label="Качество видео (кодирование)",
+                    info="CRF ниже = лучше картинка и больше файл",
+                )
+                keep_audio = gr.Checkbox(value=True, label="Сохранять звук исходного видео")
 
         with gr.Tabs():
             with gr.TabItem("🖼  Фото"):
                 gr.Markdown("#### Исходные лица (до 3)")
                 with gr.Row():
                     with gr.Column():
-                        src1 = gr.Image(label="Источник A", type="pil", height=160)
+                        src1 = gr.Image(label="Источник A", type="pil", height=150)
                         idx1 = gr.Number(value=0, label="Лицо на A", precision=0)
                         map1 = gr.Number(value=0, label="→ цель индекс", precision=0)
                     with gr.Column():
-                        src2 = gr.Image(label="Источник B", type="pil", height=160)
+                        src2 = gr.Image(label="Источник B", type="pil", height=150)
                         idx2 = gr.Number(value=0, label="Лицо на B", precision=0)
                         map2 = gr.Number(value=1, label="→ цель индекс", precision=0)
                     with gr.Column():
-                        src3 = gr.Image(label="Источник C", type="pil", height=160)
+                        src3 = gr.Image(label="Источник C", type="pil", height=150)
                         idx3 = gr.Number(value=0, label="Лицо на C", precision=0)
                         map3 = gr.Number(value=2, label="→ цель индекс", precision=0)
                 single_mode_p = gr.Checkbox(value=True, label="Один источник на все лица цели")
                 tgt_photo = gr.Image(label="Целевое фото", type="pil", height=220)
                 with gr.Row():
                     btn_det_tgt = gr.Button("Найти лица", elem_classes=["secondary-btn"], size="sm")
-                    out_format = gr.Radio(["JPG", "PNG"], value="JPG", label="Формат")
-                tgt_preview = gr.Image(label="Лица на цели", height=130, interactive=False)
+                    out_format = gr.Radio(["JPG", "PNG"], value="PNG", label="Формат")
+                tgt_preview = gr.Image(label="Лица на цели", height=120, interactive=False)
                 tgt_status = gr.Markdown("", elem_classes=["status-text"])
                 btn_swap_p = gr.Button("✨ Заменить лица", variant="primary", elem_classes=["primary-btn"], size="lg")
                 out_photo = gr.Image(label="Результат", height=360)
@@ -327,7 +372,7 @@ def build_ui():
                 btn_swap_p.click(
                     swap_photo,
                     [src1, src2, src3, idx1, idx2, idx3, map1, map2, map3,
-                     tgt_photo, single_mode_p, speed_mode, enhance, upscale_mode, out_format],
+                     tgt_photo, single_mode_p, speed_mode, enhance_mode, upscale_mode, out_format],
                     [out_photo, out_path_p],
                 )
 
@@ -352,24 +397,28 @@ def build_ui():
                 with gr.Row():
                     start_sec = gr.Slider(0, 60, value=0, step=0.5, label="Начало (сек)")
                     end_sec = gr.Slider(0, 60, value=15, step=0.5, label="Конец (сек)")
-                detect_every = gr.Slider(1, 5, value=2, step=1, label="Детекция каждые N кадров")
+                detect_every = gr.Slider(
+                    1, 5, value=1, step=1,
+                    label="Детекция каждые N кадров (1 = макс. качество, 2–3 = быстрее)",
+                )
                 tgt_video.change(on_video_upload, [tgt_video], [start_sec, end_sec, video_info])
                 btn_swap_v = gr.Button("✨ Заменить лица в видео", variant="primary", elem_classes=["primary-btn"], size="lg")
-                out_video = gr.Video(label="Результат")
+                out_video = gr.Video(label="Результат (со звуком)")
                 out_path_v = gr.Textbox(label="Файл", interactive=False)
                 btn_swap_v.click(
                     swap_video,
                     [vsrc1, vsrc2, vsrc3, vidx1, vidx2, vidx3, vmap1, vmap2, vmap3,
                      tgt_video, single_mode_v, start_sec, end_sec,
-                     speed_mode, detect_every, enhance, upscale_mode],
+                     speed_mode, detect_every, enhance_mode, upscale_mode,
+                     video_quality, keep_audio],
                     [out_video, out_path_v],
                 )
 
             with gr.TabItem("✏️  Редактор"):
                 gr.Markdown("Промпты на английском: `add sunglasses`, `make the person smile`")
                 with gr.Row():
-                    edit_in = gr.Image(label="Фото", type="pil", height=260)
-                    edit_out = gr.Image(label="Результат", height=260)
+                    edit_in = gr.Image(label="Фото", type="pil", height=250)
+                    edit_out = gr.Image(label="Результат", height=250)
                 edit_prompt = gr.Textbox(label="Инструкция", placeholder="add sunglasses")
                 with gr.Row():
                     edit_steps = gr.Slider(10, 40, value=20, step=1, label="Шаги")
@@ -381,19 +430,15 @@ def build_ui():
                 btn_edit.click(run_edit, [edit_in, edit_prompt, edit_steps, edit_img_g, edit_cfg, edit_seed], [edit_out, edit_path])
 
             with gr.TabItem("🎥  Оживить фото"):
-                gr.Markdown("**Zoom/Pan** — сразу на CPU. **SVD** — только с рабочим GPU.")
+                gr.Markdown("**Zoom/Pan** — сразу. **SVD** — нужен PyTorch CUDA.")
                 with gr.Row():
-                    anim_in = gr.Image(label="Фото", type="pil", height=240)
-                    anim_out = gr.Video(label="Результат", height=240)
+                    anim_in = gr.Image(label="Фото", type="pil", height=230)
+                    anim_out = gr.Video(label="Результат", height=230)
                 anim_mode = gr.Radio(
                     ["Zoom in", "Zoom out", "Pan right", "Pan left", "Pulse", "Нейро (SVD) — нужен GPU"],
                     value="Zoom in", label="Режим",
                 )
-                anim_prompt = gr.Textbox(
-                    label="Описание движения (опционально)",
-                    placeholder="например: slow zoom to face, camera pans right...",
-                    lines=2,
-                )
+                anim_prompt = gr.Textbox(label="Описание (опционально)", placeholder="slow zoom to face...", lines=2)
                 with gr.Row():
                     anim_sec = gr.Slider(1, 8, value=3, step=0.5, label="Сек (простая)")
                     anim_frames = gr.Slider(10, 25, value=14, step=1, label="Кадров SVD")
@@ -401,15 +446,18 @@ def build_ui():
                     anim_seed = gr.Number(value=0, label="Seed", precision=0)
                 btn_anim = gr.Button("🎥 Оживить", variant="primary", elem_classes=["primary-btn"], size="lg")
                 anim_path = gr.Textbox(label="Файл", interactive=False)
-                btn_anim.click(run_animate, [anim_in, anim_mode, anim_prompt, anim_sec, anim_frames, anim_motion, anim_seed], [anim_out, anim_path])
+                btn_anim.click(
+                    run_animate,
+                    [anim_in, anim_mode, anim_prompt, anim_sec, anim_frames, anim_motion, anim_seed],
+                    [anim_out, anim_path],
+                )
 
         gr.HTML("""
         <div class="tips">
-            <strong>Важно</strong><br>
-            • Пока CUDA DLL не грузится — face-swap идёт на <strong>CPU</strong> (медленно).<br>
-            • Для видео используйте короткий отрезок и детекцию каждые 2–3 кадра.<br>
-            • Прогресс показывается полоской над интерфейсом во время обработки.<br>
-            • SVD на CPU недоступен — берите Zoom in / Pan.
+            <strong>Качество</strong><br>
+            • Для лучшей картинки: детекция <code>640/800</code>, резкость <code>Среднее/Сильное</code>, видео <code>CRF 18–20</code>, детекция каждый кадр.<br>
+            • Звук копируется из исходного видео (галочка «Сохранять звук»).<br>
+            • Результаты — в <code>outputs/</code>.
         </div>
         """)
 

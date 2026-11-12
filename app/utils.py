@@ -1,7 +1,7 @@
 from pathlib import Path
 import uuid
-import shutil
 import subprocess
+import shutil
 import cv2
 import numpy as np
 
@@ -54,7 +54,6 @@ def create_video_writer(path: str | Path, width: int, height: int, fps: float):
     width = int(width) // 2 * 2
     height = int(height) // 2 * 2
     fps = float(fps) if fps and fps > 1 else 25.0
-
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(str(path), fourcc, fps, (width, height))
     if not writer.isOpened():
@@ -66,49 +65,102 @@ def create_video_writer(path: str | Path, width: int, height: int, fps: float):
     return writer, path, width, height
 
 
-def make_browser_compatible(video_path: str | Path) -> Path:
-    """
-    Перекодирует видео в H.264 + yuv420p для превью в браузере.
-    mp4v часто не играет в Chrome — поэтому нужен этот шаг.
-    """
-    video_path = Path(video_path)
-    out_path = video_path.with_name(video_path.stem + "_preview.mp4")
-
-    # 1) imageio-ffmpeg (есть в requirements)
+def _ffmpeg_exe() -> str | None:
     try:
         import imageio_ffmpeg
-        ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-        cmd = [
-            ffmpeg, "-y", "-i", str(video_path),
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-            "-pix_fmt", "yuv420p",
-            "-movflags", "+faststart",
-            "-an",
-            str(out_path),
-        ]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        if r.returncode == 0 and out_path.exists() and out_path.stat().st_size > 1000:
-            print(f"[Video] Превью H.264: {out_path}")
-            return out_path
-        print(f"[Video] ffmpeg exit {r.returncode}: {r.stderr[-500:] if r.stderr else ''}")
-    except Exception as e:
-        print(f"[Video] imageio-ffmpeg: {e}")
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        pass
+    if shutil.which("ffmpeg"):
+        return "ffmpeg"
+    return None
 
-    # 2) системный ffmpeg
+
+def merge_audio(video_no_audio: str | Path, source_video: str | Path,
+                start_sec: float = 0.0, end_sec: float = 0.0) -> Path:
+    """
+    Накладывает звук из исходного видео на обработанное (без звука).
+    Обрезает аудио по start/end, если задан отрезок.
+    """
+    video_no_audio = Path(video_no_audio)
+    source_video = Path(source_video)
+    out_path = video_no_audio.with_name(video_no_audio.stem + "_audio.mp4")
+    ff = _ffmpeg_exe()
+    if not ff:
+        print("[Audio] ffmpeg не найден — видео без звука")
+        return video_no_audio
+
+    # -ss/-to на входном аудио-источнике
+    cmd = [ff, "-y"]
+    if start_sec and start_sec > 0:
+        cmd += ["-ss", str(start_sec)]
+    cmd += ["-i", str(video_no_audio)]
+    if start_sec and start_sec > 0:
+        cmd += ["-ss", str(start_sec)]
+    cmd += ["-i", str(source_video)]
+    if end_sec and end_sec > start_sec:
+        # длительность отрезка
+        dur = float(end_sec) - float(start_sec or 0)
+        cmd += ["-t", str(dur)]
+
+    cmd += [
+        "-map", "0:v:0",
+        "-map", "1:a:0?",
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-shortest",
+        "-movflags", "+faststart",
+        str(out_path),
+    ]
     try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        if r.returncode == 0 and out_path.exists() and out_path.stat().st_size > 1000:
+            print(f"[Audio] Звук добавлен: {out_path}")
+            return out_path
+        print(f"[Audio] merge fail ({r.returncode}): {(r.stderr or '')[-400:]}")
+    except Exception as e:
+        print(f"[Audio] error: {e}")
+    return video_no_audio
+
+
+def make_browser_compatible(video_path: str | Path, crf: int = 20, preset: str = "fast") -> Path:
+    """H.264 для превью в браузере. crf ниже = лучше качество (18–23)."""
+    video_path = Path(video_path)
+    out_path = video_path.with_name(video_path.stem + "_h264.mp4")
+    ff = _ffmpeg_exe()
+    if not ff:
+        print("[Video] ffmpeg не найден")
+        return video_path
+
+    cmd = [
+        ff, "-y", "-i", str(video_path),
+        "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
+        "-pix_fmt", "yuv420p",
+        "-c:a", "copy",
+        "-movflags", "+faststart",
+        str(out_path),
+    ]
+    # если аудио нет — не падаем
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        if r.returncode == 0 and out_path.exists() and out_path.stat().st_size > 1000:
+            print(f"[Video] H.264 (crf={crf}): {out_path}")
+            return out_path
+        # без аудиодорожки
         cmd = [
-            "ffmpeg", "-y", "-i", str(video_path),
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-            "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-an",
+            ff, "-y", "-i", str(video_path),
+            "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
+            "-pix_fmt", "yuv420p", "-an",
+            "-movflags", "+faststart",
             str(out_path),
         ]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         if r.returncode == 0 and out_path.exists() and out_path.stat().st_size > 1000:
             return out_path
+        print(f"[Video] h264 fail: {(r.stderr or '')[-300:]}")
     except Exception as e:
-        print(f"[Video] system ffmpeg: {e}")
-
-    print("[Video] H.264 не удался — отдаём оригинал (может не играть в браузере)")
+        print(f"[Video] h264 error: {e}")
     return video_path
 
 
