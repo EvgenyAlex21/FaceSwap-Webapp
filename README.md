@@ -1,72 +1,63 @@
 # Local Face Swap
 
-Полностью локальная замена лиц на фото и видео.
+Локальная замена лиц на фото и видео.
 
-- Автоматическое определение всех лиц
-- Улучшение резкости и контраста
-- Апскейл до HD / Full HD
-- Сохранение фото в JPG или PNG
-- Работает на NVIDIA GPU и CPU
+## Возможности
+
+- **Несколько исходных лиц** — лицо A → цель 0, лицо B → цель 1 и т.д.
+- **Отрезок видео** — слайдеры «Начало / Конец» (сек)
+- Автозамена всех лиц одним источником (галочка)
+- Улучшение резкости + апскейл HD / Full HD
+- Фото: JPG или PNG
+- Результат всегда в папке `outputs/`
 
 ## Быстрый старт
 
 ```bash
 cd local-faceswap
 python -m venv venv
-
-# Windows
-venv\Scripts\activate
-
-# Linux / macOS
-# source venv/bin/activate
+venv\Scripts\activate          # Windows
+# source venv/bin/activate     # Linux/macOS
 
 pip install -r requirements.txt
 python download_models.py
 python app/main.py
 ```
 
-Откроется: **http://127.0.0.1:7860**
+http://127.0.0.1:7860
 
-## Возможности
+## Несколько лиц
 
-| Функция | Описание |
-|---------|----------|
-| Автозамена лиц | Система сама находит все лица и заменяет их |
-| Улучшение качества | Резкость + контраст после замены |
-| Апскейл | 2x ≈ HD, 4x ≈ Full HD+ |
-| Формат фото | JPG или PNG |
-| Скорость | Режимы детекции 320 / 480 / 640 |
+1. Снимите «Один источник на все лица»
+2. Загрузите фото A / B / C
+3. Укажите индекс лица на цели (кнопка «Найти лица»)
+4. Пример: A→0, B→1
 
-## GPU (NVIDIA)
+## Видео
 
-Рекомендуемая связка:
+- Выберите отрезок слайдерами
+- «Детекция каждые N кадров»: 2–3 = быстрее, 1 = точнее
+- Результат сохраняется в `outputs/` и показывается в превью
 
-```bash
-pip uninstall onnxruntime onnxruntime-gpu -y
-pip install onnxruntime-gpu==1.20.1
-pip install nvidia-cublas-cu12 nvidia-cuda-runtime-cu12 nvidia-cudnn-cu12 nvidia-cuda-nvrtc-cu12
-```
+## GPU
+
+Сейчас часто падает загрузка CUDA DLL (error 126) → работа на CPU (медленно).
 
 Проверка:
 ```bash
 python -c "import onnxruntime as ort; print(ort.get_available_providers())"
 ```
-Должен быть `CUDAExecutionProvider`.
 
-Если CUDA не поднимается — программа продолжит работать на CPU.
+Нужен рабочий `CUDAExecutionProvider` без error 126 при запуске.
+При CPU 15 сек видео может занимать десятки минут — это нормально без GPU.
 
 ## Структура
 
 ```
 local-faceswap/
 ├── app/
-│   ├── main.py       # Интерфейс
-│   ├── swapper.py    # Ядро замены
-│   └── utils.py
-├── models/           # Модели (скачиваются)
-├── outputs/          # Результаты
+├── models/
+├── outputs/
 ├── download_models.py
 └── requirements.txt
 ```
-
-Результаты сохраняются в `outputs/`.

@@ -1,12 +1,14 @@
 """
 Ядро face-swap.
-Точное сопоставление лиц по эмбеддингу (и на фото, и в видео).
+- Несколько исходных лиц → разные лица на цели
+- Точная замена на каждом кадре
+- Выбор отрезка видео (start/end сек)
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 
 import cv2
 import numpy as np
@@ -44,16 +46,6 @@ def _get_providers():
         return ["CPUExecutionProvider"]
 
 
-def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    a = a.astype(np.float32).flatten()
-    b = b.astype(np.float32).flatten()
-    na = np.linalg.norm(a)
-    nb = np.linalg.norm(b)
-    if na < 1e-6 or nb < 1e-6:
-        return -1.0
-    return float(np.dot(a, b) / (na * nb))
-
-
 class FaceSwapper:
     def __init__(self, det_size: Tuple[int, int] = (480, 480)):
         self.providers = _get_providers()
@@ -65,7 +57,6 @@ class FaceSwapper:
     def initialize(self):
         if self._initialized:
             return
-
         print("[FaceSwapper] Загрузка моделей...")
         prov_names = [p[0] if isinstance(p, tuple) else p for p in self.providers]
         print(f"[FaceSwapper] Providers: {prov_names}")
@@ -82,7 +73,6 @@ class FaceSwapper:
             raise FileNotFoundError(
                 f"Модель {swapper_path} не найдена.\nЗапусти: python download_models.py"
             )
-
         self.swapper = get_model(str(swapper_path), providers=self.providers)
         self._initialized = True
         print("[FaceSwapper] Модели загружены.")
@@ -96,7 +86,6 @@ class FaceSwapper:
     def get_faces(self, img: np.ndarray):
         self.initialize()
         faces = self.app.get(img)
-        # Сортируем по размеру (крупные первые) — удобно для превью
         faces = sorted(
             faces,
             key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]),
@@ -118,67 +107,54 @@ class FaceSwapper:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 2, cv2.LINE_AA)
         return preview, len(faces)
 
-    def _best_matching_faces(self, faces, source_embedding, threshold: float = 0.15):
-        """
-        Возвращает лица, наиболее похожие на source по эмбеддингу.
-        Если swap_all — возвращаем все, но сортируем по схожести.
-        threshold — минимальная косинусная близость (низкий = почти все лица).
-        """
-        if not faces or source_embedding is None:
-            return faces
-
-        scored = []
-        for f in faces:
-            emb = getattr(f, "embedding", None)
-            if emb is None:
-                scored.append((0.0, f))
-                continue
-            sim = _cosine_similarity(source_embedding, emb)
-            scored.append((sim, f))
-
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return [f for sim, f in scored if sim >= threshold] or [scored[0][1]]
+    def _load_source_face(self, source_path: str | Path, face_index: int = 0):
+        img = read_image(source_path)
+        faces = self.get_faces(img)
+        if not faces:
+            raise ValueError(f"На фото {source_path} лицо не найдено")
+        idx = min(face_index, len(faces) - 1)
+        return faces[idx]
 
     def swap_image(
         self,
-        source_path: str | Path,
+        source_map: Dict[int, Tuple[str | Path, int]],
         target_path: str | Path,
-        source_face_index: int = 0,
-        target_face_indices: Optional[List[int]] = None,
-        swap_all: bool = True,
+        swap_all_with_first: bool = False,
         enhance: bool = False,
         upscale: int = 1,
         out_format: str = "jpg",
     ) -> Path:
+        """
+        source_map: { target_face_index: (source_image_path, source_face_index) }
+        Если swap_all_with_first=True и в map только один источник —
+        все лица на цели заменяются этим источником.
+        """
         self.initialize()
-
-        source_img = read_image(source_path)
         target_img = read_image(target_path)
-
-        source_faces = self.get_faces(source_img)
         target_faces = self.get_faces(target_img)
-
-        if not source_faces:
-            raise ValueError("На исходном фото лицо не найдено")
         if not target_faces:
             raise ValueError("На целевом фото лицо не найдено")
 
-        if source_face_index >= len(source_faces):
-            source_face_index = 0
-
-        source_face = source_faces[source_face_index]
-        source_emb = getattr(source_face, "embedding", None)
-
-        if swap_all or not target_face_indices:
-            # Меняем все лица (как раньше)
-            indices = list(range(len(target_faces)))
-        else:
-            indices = target_face_indices
+        # Кэш исходных лиц
+        source_cache = {}
+        for t_idx, (src_path, s_idx) in source_map.items():
+            key = (str(src_path), s_idx)
+            if key not in source_cache:
+                source_cache[key] = self._load_source_face(src_path, s_idx)
 
         result = target_img.copy()
-        for idx in indices:
-            if 0 <= idx < len(target_faces):
-                result = self.swapper.get(result, target_faces[idx], source_face, paste_back=True)
+
+        if swap_all_with_first and source_map:
+            # Один источник на все лица
+            first_key = next(iter(source_map.values()))
+            src_face = source_cache[(str(first_key[0]), first_key[1])]
+            for tf in target_faces:
+                result = self.swapper.get(result, tf, src_face, paste_back=True)
+        else:
+            for t_idx, (src_path, s_idx) in source_map.items():
+                if 0 <= t_idx < len(target_faces):
+                    src_face = source_cache[(str(src_path), s_idx)]
+                    result = self.swapper.get(result, target_faces[t_idx], src_face, paste_back=True)
 
         if enhance:
             result = enhance_face_region(result, strength=0.65)
@@ -191,52 +167,60 @@ class FaceSwapper:
 
     def swap_video(
         self,
-        source_path: str | Path,
+        source_map: Dict[int, Tuple[str | Path, int]],
         target_video_path: str | Path,
-        source_face_index: int = 0,
-        target_face_indices: Optional[List[int]] = None,
-        swap_all: bool = True,
-        max_frames: Optional[int] = None,
+        swap_all_with_first: bool = False,
+        start_sec: float = 0.0,
+        end_sec: float = 0.0,
         detect_every_n: int = 1,
         enhance: bool = False,
         upscale: int = 1,
         progress_callback=None,
     ) -> Path:
         """
-        Видео: на каждом кадре (или каждые N) ищем лица заново
-        и сопоставляем с исходным лицом по эмбеддингу — как на фото.
+        source_map: { target_face_index: (source_image_path, source_face_index) }
+        start_sec / end_sec — отрезок видео (end_sec=0 → до конца)
         """
         self.initialize()
 
-        source_img = read_image(source_path)
-        source_faces = self.get_faces(source_img)
-        if not source_faces:
-            raise ValueError("На исходном фото лицо не найдено")
+        source_cache = {}
+        for t_idx, (src_path, s_idx) in source_map.items():
+            key = (str(src_path), s_idx)
+            if key not in source_cache:
+                source_cache[key] = self._load_source_face(src_path, s_idx)
 
-        if source_face_index >= len(source_faces):
-            source_face_index = 0
-        source_face = source_faces[source_face_index]
-        source_emb = getattr(source_face, "embedding", None)
+        if not source_cache:
+            raise ValueError("Не загружено ни одного исходного лица")
 
-        width, height, fps, total_frames = get_video_info(target_video_path)
-        if max_frames:
-            total_frames = min(total_frames, max_frames)
+        width, height, fps, total_frames, duration = get_video_info(target_video_path)
+
+        start_frame = int(max(0, start_sec) * fps)
+        if end_sec and end_sec > start_sec:
+            end_frame = min(int(end_sec * fps), total_frames)
+        else:
+            end_frame = total_frames
+
+        frames_to_process = max(0, end_frame - start_frame)
+        if frames_to_process == 0:
+            raise ValueError("Пустой отрезок видео")
 
         out_w, out_h = width * upscale, height * upscale
         out_path = OUTPUTS / unique_name("swap_vid", ".mp4")
         writer = create_video_writer(out_path, out_w, out_h, fps)
 
         cap = cv2.VideoCapture(str(target_video_path))
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
         frame_idx = 0
         last_faces = []
+        default_src = next(iter(source_cache.values()))
 
         try:
-            while frame_idx < total_frames:
+            while frame_idx < frames_to_process:
                 ret, frame = cap.read()
                 if not ret:
                     break
 
-                # Детекция: по умолчанию каждый кадр (точность как на фото)
                 if frame_idx % max(detect_every_n, 1) == 0 or not last_faces:
                     faces = self.get_faces(frame)
                     last_faces = faces
@@ -244,18 +228,17 @@ class FaceSwapper:
                     faces = last_faces
 
                 if faces:
-                    if swap_all or not target_face_indices:
-                        # Все лица на кадре
-                        to_swap = faces
+                    if swap_all_with_first:
+                        for tf in faces:
+                            frame = self.swapper.get(frame, tf, default_src, paste_back=True)
                     else:
-                        # Конкретные индексы (по размеру, как в превью)
-                        to_swap = [faces[i] for i in target_face_indices if 0 <= i < len(faces)]
-
-                    for target_face in to_swap:
-                        frame = self.swapper.get(frame, target_face, source_face, paste_back=True)
+                        for t_idx, (src_path, s_idx) in source_map.items():
+                            if 0 <= t_idx < len(faces):
+                                src_face = source_cache[(str(src_path), s_idx)]
+                                frame = self.swapper.get(frame, faces[t_idx], src_face, paste_back=True)
 
                 if enhance:
-                    frame = enhance_face_region(frame, strength=0.5)
+                    frame = enhance_face_region(frame, strength=0.45)
                 if upscale > 1:
                     frame = upscale_image(frame, scale=upscale)
 
@@ -263,7 +246,7 @@ class FaceSwapper:
                 frame_idx += 1
 
                 if progress_callback and frame_idx % 5 == 0:
-                    progress_callback(min(frame_idx / total_frames, 1.0))
+                    progress_callback(min(frame_idx / frames_to_process, 1.0))
         finally:
             cap.release()
             writer.release()
