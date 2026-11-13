@@ -286,6 +286,7 @@ def on_video_upload(video):
             gr.update(maximum=60, value=0),
             "Загрузите видео",
             "Отрезок: **—**",
+            gr.update(choices=[], value=None),
         )
     try:
         try:
@@ -299,9 +300,10 @@ def on_video_upload(video):
             gr.update(maximum=dur, value=min(dur, 15.0)),
             f"Длительность: **{_fmt_hms(dur)}** ({dur:.1f} сек) · {total} кадров · {fps:.1f} fps",
             f"Отрезок: **{_fmt_hms(0)} — {_fmt_hms(min(dur, 15.0))}**",
+            gr.update(choices=[], value=None),
         )
     except Exception as e:
-        return gr.update(), gr.update(), f"Ошибка: {e}", "Отрезок: **—**"
+        return gr.update(), gr.update(), f"Ошибка: {e}", "Отрезок: **—**", gr.update()
 
 
 def _update_range_text(start, end):
@@ -315,7 +317,17 @@ def _update_range_text(start, end):
     return f"Отрезок: **{_fmt_hms(s)} — {_fmt_hms(e)}** (длительность {_fmt_hms(e - s)})"
 
 
-def detect_video_faces(video_path, det_mode, progress=gr.Progress(track_tqdm=False)):
+def reset_vid_faces():
+    return (
+        "Отрезок изменён — нажмите «Найти лица в видео»",
+        *[None] * MAX_FACES,
+        *[gr.update(visible=False)] * MAX_FACES,
+        0,
+        gr.update(choices=[], value=None),
+    )
+
+
+def detect_video_faces(video_path, det_mode, start_sec, end_sec, progress=gr.Progress(track_tqdm=False)):
     if video_path is None:
         return "Загрузите видео", *[None]*MAX_FACES, *[gr.update(visible=False)]*MAX_FACES, 0, gr.update(choices=[], value=None)
 
@@ -327,18 +339,35 @@ def detect_video_faces(video_path, det_mode, progress=gr.Progress(track_tqdm=Fal
 
     sw = _apply_det(det_mode)
     cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
     if total_frames <= 0:
         cap.release()
         return "Ошибка чтения видео", *[None]*MAX_FACES, *[gr.update(visible=False)]*MAX_FACES, 0, gr.update(choices=[], value=None)
 
-    step = max(1, total_frames // 150)
+    start_frame = int(max(0, float(start_sec or 0)) * fps)
+    end_frame = int(min(total_frames, float(end_sec or 0) * fps)) if end_sec and end_sec > start_sec else total_frames
+    
+    if end_frame <= start_frame:
+        end_frame = total_frames
+
+    frames_to_scan = end_frame - start_frame
+    step = max(1, frames_to_scan // 100)
+    
     unique_faces = []
     crops = []
 
-    for f_idx in range(0, total_frames, step):
-        progress(min(0.05 + 0.8 * (f_idx/total_frames), 0.85), desc=f"Анализ...")
+    # Порог схожести (косинусное расстояние). 
+    # Чем меньше, тем строже. 0.5 - оптимально для insightface buffalo_l
+    # Порог косинусного сходства. 
+    # 1.0 - абсолютно идентичны, 0.0 - разные люди.
+    # 0.45 - 0.55 - хороший баланс для видео (позволяет распознать
+    # одно лицо в разных ракурсах, но не склеивает разных людей).
+    threshold = 0.5 
+
+    for f_idx in range(start_frame, end_frame, step):
+        progress(min(0.05 + 0.8 * ((f_idx - start_frame)/frames_to_scan), 0.85), desc=f"Анализ кадра {f_idx}...")
         cap.set(cv2.CAP_PROP_POS_FRAMES, f_idx)
         ret, frame = cap.read()
         if not ret: break
@@ -346,12 +375,24 @@ def detect_video_faces(video_path, det_mode, progress=gr.Progress(track_tqdm=Fal
         faces = sw.get_faces(frame)
         for face in faces:
             is_new = True
-            for uf in unique_faces:
+            
+            if face.embedding is not None:
+                emb1 = face.embedding / np.linalg.norm(face.embedding)
+                for uf in unique_faces:
+                    if uf.embedding is not None:
+                        emb2 = uf.embedding / np.linalg.norm(uf.embedding)
+                        sim = np.dot(emb1, emb2)
+                        if sim > threshold:
+                            is_new = False
+                            break
+            else:
                 cx, cy = (face.bbox[0]+face.bbox[2])/2, (face.bbox[1]+face.bbox[3])/2
-                ucx, ucy = (uf.bbox[0]+uf.bbox[2])/2, (uf.bbox[1]+uf.bbox[3])/2
-                if math.hypot(cx-ucx, cy-ucy) < frame.shape[1] * 0.15:
-                    is_new = False
-                    break
+                for uf in unique_faces:
+                    ucx, ucy = (uf.bbox[0]+uf.bbox[2])/2, (uf.bbox[1]+uf.bbox[3])/2
+                    if math.hypot(cx-ucx, cy-ucy) < frame.shape[1] * 0.15:
+                        is_new = False
+                        break
+
             if is_new:
                 unique_faces.append(face)
                 crops.append(_to_pil(_crop_face(frame, face)))
@@ -957,7 +998,7 @@ def build_ui():
                         [
                             "Проверьте параметры обработки. Значения по умолчанию подходят для большинства роликов.",
                             "Загрузите фото с лицом-источником и нажмите «Найти лица на фото».",
-                            "Загрузите видео, нажмите «Найти лица в видео» и задайте начало и конец обрабатываемого фрагмента.",
+                            "Загрузите видео, задайте начало и конец обрабатываемого фрагмента и нажмите «Найти лица в видео».",
                             "В разделе «Сопоставление лиц» выберите, чьё лицо вставляем и кому.",
                             "Нажмите «Заменить лица в видео». Готовый файл сохранится в папке <strong>outputs/</strong>.",
                         ],
@@ -1040,8 +1081,8 @@ def build_ui():
                     vid_crops_only = [vid_face_slots[i] for i in range(1, len(vid_face_slots), 2)]
 
                     with gr.Row():
-                        start_sec = gr.Slider(0, 60, value=0, step=0.1, label="Начало (сек)")
-                        end_sec = gr.Slider(0, 60, value=15, step=0.1, label="Конец (сек)")
+                        start_sec = gr.Slider(0, 86400, value=0, step=0.1, label="Начало (сек)")
+                        end_sec = gr.Slider(0, 86400, value=15, step=0.1, label="Конец (сек)")
                     range_display = gr.Markdown("Отрезок: **00:00:00 — 00:00:15**", elem_classes=["status-text"])
 
                     # --- СОПОСТАВЛЕНИЕ ---
@@ -1050,7 +1091,12 @@ def build_ui():
                         src_choice = gr.Dropdown(choices=[], label="Лицо из фото (Кого вставляем?)")
                         vid_choice = gr.Dropdown(choices=[], label="Лицо в видео (Кому вставляем?)")
 
-                    tgt_video.change(on_video_upload, [tgt_video], [start_sec, end_sec, video_info, range_display])
+                    tgt_video.change(
+                        on_video_upload, 
+                        [tgt_video], 
+                        [start_sec, end_sec, video_info, range_display, vid_choice]
+                    )
+
                     start_sec.change(_update_range_text, [start_sec, end_sec], range_display)
                     end_sec.change(_update_range_text, [start_sec, end_sec], range_display)
 
@@ -1068,11 +1114,20 @@ def build_ui():
                         lambda: "Сканирование видео...", None, vid_status, show_progress="hidden"
                     ).then(
                         detect_video_faces,
-                        [tgt_video, vid_det],
+                        [tgt_video, vid_det, start_sec, end_sec],
                         [vid_status, *vid_crops_only, *vid_grps_only, vid_count, vid_choice],
                         show_progress="full",
                         show_progress_on=[tgt_video],
                     )
+
+                    for slider in [start_sec, end_sec]:
+                        slider.change(
+                            reset_vid_faces,
+                            None,
+                            [vid_status, *vid_crops_only, *vid_grps_only, vid_count, vid_choice],
+                            show_progress="hidden",
+                            trigger_mode="always_last",
+                        )
 
                     gr.Markdown("### 4. Результат", elem_classes=["section-title"])
                     btn_swap_v = gr.Button(

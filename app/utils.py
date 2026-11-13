@@ -97,28 +97,43 @@ def merge_audio(video_no_audio: str | Path, source_video: str | Path,
         print("[Audio] ffmpeg не найден — видео без звука")
         return video_no_audio
 
-    cmd = [ff, "-y"]
-    if start_sec and start_sec > 0:
-        cmd += ["-ss", str(start_sec)]
-    cmd += ["-i", str(video_no_audio)]
-    if start_sec and start_sec > 0:
-        cmd += ["-ss", str(start_sec)]
-    cmd += ["-i", str(source_video)]
     if end_sec and end_sec > start_sec:
-        dur = float(end_sec) - float(start_sec or 0)
-        cmd += ["-t", str(dur)]
+        duration = float(end_sec) - float(start_sec or 0)
+    else:
+        # Получаем длительность обработанного видео (без звука)
+        try:
+            _, _, _, _, duration = get_video_info(video_no_audio)
+        except Exception:
+            duration = 0.0
+
+    if duration <= 0:
+        print("[Audio] Не удалось определить длительность, звук не добавлен")
+        return video_no_audio
+
+    cmd = [ff, "-y"]
+
+    cmd += ["-i", str(video_no_audio)]
+    
+    if start_sec and start_sec > 0:
+        cmd += ["-ss", str(start_sec)]
+        
+    cmd += ["-i", str(source_video)]
+
+    cmd += ["-t", str(duration)]
 
     cmd += [
-        "-map", "0:v:0",
-        "-map", "1:a:0?",
-        "-c:v", "copy",
-        "-c:a", "aac",
+        "-map", "0:v:0",          
+        "-map", "1:a:0?",         
+        "-c:v", "copy",           
+        "-c:a", "aac",            
         "-b:a", "192k",
-        "-shortest",
+        "-shortest",              
         "-movflags", "+faststart",
         str(out_path),
     ]
+    
     try:
+        print(f"[Audio] Запуск ffmpeg: {' '.join(cmd)}")
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         if r.returncode == 0 and out_path.exists() and out_path.stat().st_size > 1000:
             print(f"[Audio] Звук добавлен: {out_path}")
