@@ -592,6 +592,22 @@ def run_inpaint(editor_data, method, radius,
         else:
             progress(0.25, desc="Модель загружена. Генерация...")
 
+        if "LUSTIFY" in model_choice:
+            try:
+                import torch, gc
+                from app.swapper import _swapper
+                if _swapper is not None and _swapper._initialized:
+                    _swapper.app = None
+                    _swapper.swapper = None
+                    _swapper._initialized = False
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                    free, total = torch.cuda.mem_get_info()
+                    print(f"[Inpaint] Face-swap модели выгружены. "
+                          f"VRAM свободно: {free/1024**3:.2f} GB из {total/1024**3:.2f} GB")
+            except Exception as e:
+                print(f"[Inpaint] Не удалось выгрузить face-swap: {e}")
+
         path = inpaint_ai(
             image_bgr, np.asarray(mask),
             prompt=str(ai_prompt or "").strip() or "nude body, realistic skin, natural anatomy, photorealistic",

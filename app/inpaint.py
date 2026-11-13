@@ -235,21 +235,55 @@ def get_inpaint_pipeline(device: str = "cuda", model_choice: str = "Realistic Vi
             "Скачайте её с Hugging Face и положите в папку models."
         )
 
+    # ---- Предварительная проверка свободной VRAM для тяжёлых моделей ----
+    if device == "cuda" and torch.cuda.is_available():
+        try:
+            free, total = torch.cuda.mem_get_info()
+            free_gb = free / 1024**3
+            print(f"[InpaintAI] VRAM: свободно {free_gb:.2f} GB из {total/1024**3:.2f} GB")
+            if pipe_type == "sdxl" and free_gb < 2.8:
+                raise RuntimeError(
+                    f"Для SDXL inpaint нужно ≥2.8 ГБ свободной VRAM, у вас {free_gb:.1f} ГБ. "
+                    "Закройте другие GPU-приложения или используйте «Realistic Vision (SD 1.5)»."
+                )
+        except RuntimeError:
+            raise
+        except Exception as e:
+            print(f"[InpaintAI] mem_get_info недоступен: {e}")
+
     print(f"[InpaintAI] Загрузка ЛОКАЛЬНОЙ модели {local_model_file.name} ({pipe_type}) на {device}...")
 
     if pipe_type == "sdxl":
-        # SDXL: не передаём load_in_8bit (его нет в from_single_file),
-        # включаем memory-friendly режимы.
+        # SDXL inpaint на 4 ГБ VRAM: критично НЕ переносить пайплайн целиком на CUDA.
+        # from_single_file создаёт пайплайн на CPU, затем sequential offload
+        # раскладывает слои по VRAM по мере надобности.
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         pipe = StableDiffusionXLInpaintPipeline.from_single_file(
             str(local_model_file),
-            torch_dtype=dtype,
-            safety_checker=None,
+            torch_dtype=torch.float16,
         )
+        pipe.safety_checker = None
+        pipe.requires_safety_checker = False
+
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         print("[InpaintAI] SDXL: sequential offload + VAE slicing/tiling + attention slicing...")
+        # ВАЖНО: sequential offload ДО любых других GPU-операций.
         try:
             pipe.enable_sequential_cpu_offload()
         except Exception as e:
             print(f"[InpaintAI] sequential_cpu_offload: {e}")
+            # fallback: обычный model offload, если sequential недоступен
+            try:
+                pipe.enable_model_cpu_offload()
+            except Exception as e2:
+                print(f"[InpaintAI] model_cpu_offload: {e2}")
         try:
             pipe.enable_vae_slicing()
         except Exception:
@@ -368,10 +402,10 @@ def inpaint_ai(
     pipe = get_inpaint_pipeline(device, model_choice)
 
     # Размер входа зависит от архитектуры и объёма VRAM.
-    # Для 4 ГБ VRAM SDXL держим на 640 и ограничиваем шаги.
+    # Для 4 ГБ VRAM SDXL держим на 512 и ограничиваем шаги.
     if "LUSTIFY" in model_choice:
-        target_size = 640
-        steps = min(int(steps), 20)
+        target_size = 512
+        steps = min(int(steps), 15)
     elif "TryOffAnyone" in model_choice:
         # TryOffAnyone — SD 1.5, 512 — родное разрешение
         target_size = 512
