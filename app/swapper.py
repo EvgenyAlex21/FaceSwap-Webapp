@@ -157,6 +157,8 @@ class FaceSwapper:
         upscale: int = 1,
         video_crf: int = 20,
         keep_audio: bool = True,
+        target_res: int = 0,
+        target_fps: int = 0,
         progress_callback=None,
     ) -> Path:
         self.initialize()
@@ -170,21 +172,35 @@ class FaceSwapper:
             raise ValueError("Не загружено ни одного исходного лица")
 
         width, height, fps, total_frames, duration = get_video_info(target_video_path)
+        
+        # === ИЗМЕНЕНИЯ КАСАТЕЛЬНО РАЗРЕШЕНИЯ И FPS ===
+        # 1. Обработка FPS
+        out_fps = float(target_fps) if target_fps > 0 else fps
+        
+        # 2. Обработка разрешения (target_res - это высота, напр. 1080, 720)
+        if target_res > 0 and target_res != height:
+            scale = target_res / height
+            out_w = int(width * scale) // 2 * 2
+            out_h = int(target_res) // 2 * 2
+        else:
+            out_w = width // 2 * 2
+            out_h = height // 2 * 2
+
         start_frame = int(max(0, start_sec) * fps)
         if end_sec and end_sec > start_sec:
             end_frame = min(int(end_sec * fps), total_frames)
         else:
             end_frame = total_frames
+            
         frames_to_process = max(0, end_frame - start_frame)
         if frames_to_process == 0:
             raise ValueError("Пустой отрезок видео")
 
         print(f"[FaceSwapper] Видео: {frames_to_process} кадров @ {fps:.1f}fps, device={get_device_name()}")
+        print(f"[FaceSwapper] Выходные параметры: {out_w}x{out_h} @ {out_fps}fps")
 
-        out_w = (width * upscale) // 2 * 2
-        out_h = (height * upscale) // 2 * 2
         raw_path = OUTPUTS / unique_name("swap_vid", ".mp4")
-        writer, raw_path, out_w, out_h = create_video_writer(raw_path, out_w, out_h, fps)
+        writer, raw_path, out_w, out_h = create_video_writer(raw_path, out_w, out_h, out_fps)
 
         cap = cv2.VideoCapture(str(target_video_path))
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
@@ -198,6 +214,12 @@ class FaceSwapper:
                 ret, frame = cap.read()
                 if not ret:
                     break
+
+                # Пропуск кадров для изменения FPS
+                if target_fps > 0 and abs(target_fps - fps) > 0.1:
+                    if frame_idx % int(round(fps / target_fps)) != 0:
+                        frame_idx += 1
+                        continue
 
                 if frame_idx % max(detect_every_n, 1) == 0 or not last_faces:
                     faces = self.get_faces(frame)
@@ -219,6 +241,8 @@ class FaceSwapper:
                     frame = enhance_face_region(frame, strength=enhance_strength)
                 if upscale > 1:
                     frame = upscale_image(frame, scale=upscale)
+                
+                # Приведение к выходному разрешению
                 if frame.shape[1] != out_w or frame.shape[0] != out_h:
                     frame = cv2.resize(frame, (out_w, out_h), interpolation=cv2.INTER_LANCZOS4)
 

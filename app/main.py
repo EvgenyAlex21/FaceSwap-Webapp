@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import List, Tuple
+import math
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -28,13 +30,29 @@ DET_SIZES = {
     "Максимум (800)": (800, 800),
 }
 
-# Целевое разрешение длинной стороны (сохраняем аспект)
 PHOTO_QUALITY = {
     "Как есть (без изменения размера)": 0,
     "HD (1280)": 1280,
     "Full HD (1920)": 1920,
     "QHD / 2K (2560)": 2560,
     "4K UHD (3840)": 3840,
+}
+
+VIDEO_RESOLUTIONS = {
+    "Как есть (оригинал)": 0,
+    "SD (480p)": 480,
+    "HD Ready (720p)": 720,
+    "Full HD (1080p)": 1080,
+    "2K / QHD (1440p)": 1440,
+    "4K Ultra HD (2160p)": 2160,
+    "8K Ultra HD (4320p)": 4320,
+}
+
+VIDEO_FPS = {
+    "Как есть (оригинал)": 0,
+    "24 fps (кино)": 24,
+    "30 fps (стандарт)": 30,
+    "60 fps (плавно)": 60,
 }
 
 ENHANCE_STRENGTH = {
@@ -108,21 +126,11 @@ def _crop_face(img_bgr, face, pad: float = 0.35):
     return img_bgr[y1:y2, x1:x2].copy()
 
 
-# ---------- PHOTO: detect target faces → slots ----------
+# ---------- PHOTO ----------
 
 def detect_target_faces(target_img, det_mode):
-    """
-    Returns:
-      status markdown,
-      crops для слотов (6),
-      visibility flags (6),
-      face_count,
-      cleared source previews (6),
-      cleared source statuses (6),
-    """
     empty = [None] * MAX_FACES
     hidden = [gr.update(visible=False)] * MAX_FACES
-    # при пересчёте целевых лиц — сбрасываем превью/статус замены
     clear_prev = [None] * MAX_FACES
     clear_stat = [""] * MAX_FACES
 
@@ -164,12 +172,7 @@ def detect_target_faces(target_img, det_mode):
 
 
 def clear_target_and_slots(target_img):
-    """Вызывается при изменении целевого фото.
-    Если фото удалено — прячем слоты и чистим превью/статусы замены.
-    Если загружено — просто сбрасываем найденные лица (нужно снова нажать «Найти лица»).
-    """
     if target_img is not None:
-        # новое фото — сбрасываем результаты поиска, но не трогаем замены
         return (
             "Нажмите «Найти лица», чтобы обновить слоты",
             *[None] * MAX_FACES,
@@ -178,7 +181,6 @@ def clear_target_and_slots(target_img):
             *[None] * MAX_FACES,
             *[""] * MAX_FACES,
         )
-    # фото удалено — чистим всё
     return (
         "",
         *[None] * MAX_FACES,
@@ -202,7 +204,6 @@ def detect_source_face(src_img, det_mode):
 
 
 def source_changed(src_img):
-    """При изменении/удалении заменяющего фото сбрасываем превью и статус."""
     return None, ""
 
 
@@ -216,7 +217,6 @@ def swap_photo_slots(
     *src_images,
     progress=gr.Progress(track_tqdm=False),
 ):
-    # --- Проверки ---
     if target_img is None:
         raise gr.Error("Загрузите целевое фото")
 
@@ -292,15 +292,129 @@ def on_video_upload(video):
         return gr.update(), gr.update(), f"Ошибка: {e}"
 
 
-def swap_video(
+def detect_video_faces(video_path, det_mode, progress=gr.Progress(track_tqdm=False)):
+    """Быстрое сканирование видео для поиска уникальных лиц."""
+    if video_path is None:
+        return "Загрузите видео", *[None]*MAX_FACES, *[gr.update(visible=False)]*MAX_FACES, 0, gr.update(choices=[], value=None)
+
+    progress(0.05, desc="Сканирование видео...")
+    try:
+        video_path = str(copy_to_uploads(video_path, prefix="vid_scan"))
+    except Exception:
+        video_path = video_path
+
+    sw = _apply_det(det_mode)
+    cap = cv2.VideoCapture(video_path)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    
+    if total_frames <= 0:
+        cap.release()
+        return "Ошибка чтения видео", *[None]*MAX_FACES, *[gr.update(visible=False)]*MAX_FACES, 0, gr.update(choices=[], value=None)
+
+    # Ограничиваем количество проверяемых кадров до 150 (чтобы не зависало на длинных видео)
+    step = max(1, total_frames // 150)
+    unique_faces = []
+    crops = []
+
+    for f_idx in range(0, total_frames, step):
+        progress(min(0.05 + 0.8 * (f_idx/total_frames), 0.85), desc=f"Анализ...")
+        cap.set(cv2.CAP_PROP_POS_FRAMES, f_idx)
+        ret, frame = cap.read()
+        if not ret: break
+        
+        faces = sw.get_faces(frame)
+        for face in faces:
+            is_new = True
+            for uf in unique_faces:
+                cx, cy = (face.bbox[0]+face.bbox[2])/2, (face.bbox[1]+face.bbox[3])/2
+                ucx, ucy = (uf.bbox[0]+uf.bbox[2])/2, (uf.bbox[1]+uf.bbox[3])/2
+                if math.hypot(cx-ucx, cy-ucy) < frame.shape[1] * 0.15:
+                    is_new = False
+                    break
+            if is_new:
+                unique_faces.append(face)
+                crops.append(_to_pil(_crop_face(frame, face)))
+                if len(unique_faces) >= MAX_FACES:
+                    break
+        if len(unique_faces) >= MAX_FACES:
+            break
+
+    cap.release()
+    
+    if not unique_faces:
+        return "❌ Лица в видео не найдены", *[None]*MAX_FACES, *[gr.update(visible=False)]*MAX_FACES, 0, gr.update(choices=[], value=None)
+
+    vis = [gr.update(visible=True)] * len(unique_faces) + [gr.update(visible=False)] * (MAX_FACES - len(unique_faces))
+    crops_padded = crops + [None] * (MAX_FACES - len(crops))
+    
+    choices = [f"Лицо #{i+1}" for i in range(len(unique_faces))]
+    
+    return (
+        f"✅ Найдено уникальных лиц: **{len(unique_faces)}**",
+        *crops_padded,
+        *vis,
+        len(unique_faces),
+        gr.update(choices=choices, value=choices[0] if choices else None)
+    )
+
+
+def detect_src_faces(src_img, det_mode):
+    if src_img is None:
+        return "Загрузите фото", *[None]*MAX_FACES, *[gr.update(visible=False)]*MAX_FACES, 0, gr.update(choices=[], value=None)
+    
+    sw = _apply_det(det_mode)
+    bgr = _to_bgr(src_img)
+    faces = sw.get_faces(bgr)
+    
+    if not faces:
+        return "❌ Лица на фото не найдены", *[None]*MAX_FACES, *[gr.update(visible=False)]*MAX_FACES, 0, gr.update(choices=[], value=None)
+
+    crops = []
+    vis = []
+    for i in range(MAX_FACES):
+        if i < len(faces):
+            crops.append(_to_pil(_crop_face(bgr, faces[i])))
+            vis.append(gr.update(visible=True))
+        else:
+            crops.append(None)
+            vis.append(gr.update(visible=False))
+            
+    choices = [f"Лицо #{i+1}" for i in range(len(faces))]
+    
+    return (
+        f"✅ Найдено лиц: **{len(faces)}**",
+        *crops,
+        *vis,
+        len(faces),  # <--- ВОТ ЭТО БЫЛО ПРОПУЩЕНО (счетчик src_count)
+        gr.update(choices=choices, value=choices[0] if choices else None)
+    )
+
+
+def swap_video_slots(
     src_img, target_video, start_sec, end_sec,
-    det_mode, detect_every, enhance_mode, video_quality, keep_audio,
+    det_mode, detect_every, enhance_mode, video_quality, 
+    video_res, video_fps, keep_audio,
+    src_face_choice, vid_face_choice,
+    src_video_count, tgt_video_count,
     progress=gr.Progress(track_tqdm=False),
 ):
     if target_video is None:
         raise gr.Error("Загрузите видео")
     if src_img is None:
         raise gr.Error("Загрузите фото лица-источника")
+    if tgt_video_count == 0:
+        raise gr.Error("Сначала нажмите «Найти лица в видео»")
+    if src_video_count == 0:
+        raise gr.Error("Сначала нажмите «Найти лица на фото»")
+
+    if not src_face_choice or not vid_face_choice:
+        raise gr.Error("Выберите лицо-источник и лицо в видео для замены")
+
+    try:
+        src_idx = int(src_face_choice.split("#")[1]) - 1
+        vid_idx = int(vid_face_choice.split("#")[1]) - 1
+    except Exception:
+        raise gr.Error("Ошибка парсинга выбранных лиц")
 
     progress(0.02, desc="Подготовка...")
     try:
@@ -310,13 +424,14 @@ def swap_video(
 
     sw = _apply_det(det_mode)
     src_path = _save_tmp(src_img, "vsrc")
-    faces = sw.get_faces(_to_bgr(src_img))
-    if not faces:
-        raise gr.Error("На фото-источнике лицо не найдено")
-
-    source_map = {0: (src_path, 0)}
+    
+    source_map = {vid_idx: (src_path, src_idx)}
+    
     strength = ENHANCE_STRENGTH.get(enhance_mode, 0.45)
     crf = VIDEO_QUALITY.get(video_quality, 20)
+    
+    tgt_res_val = VIDEO_RESOLUTIONS.get(video_res, 0)
+    tgt_fps_val = VIDEO_FPS.get(video_fps, 0)
 
     def cb(p, msg=""):
         progress(p, desc=msg or "Обработка видео...")
@@ -324,7 +439,7 @@ def swap_video(
     result_path = sw.swap_video(
         source_map=source_map,
         target_video_path=video_path,
-        swap_all_with_first=True,
+        swap_all_with_first=False,
         start_sec=float(start_sec or 0),
         end_sec=float(end_sec or 0),
         detect_every_n=int(detect_every),
@@ -333,6 +448,8 @@ def swap_video(
         upscale=1,
         video_crf=crf,
         keep_audio=bool(keep_audio),
+        target_res=tgt_res_val,
+        target_fps=tgt_fps_val,
         progress_callback=cb,
     )
     path = str(Path(result_path).resolve())
@@ -468,15 +585,16 @@ CUSTOM_CSS = """
 .secondary-btn {
     background: rgba(255,255,255,0.05) !important;
     border: 1px solid rgba(255,255,255,0.1) !important;
-    color: #e2e8f0 !important; border-radius: 10px !important;
+    color: #e2e8f0 !important;
+    border-radius: 10px !important;
 }
-.face-slot {
-    border: 1px solid rgba(167,139,250,0.2);
-    border-radius: 12px;
-    padding: 8px;
-    background: rgba(15,23,42,0.5);
+.status-text { 
+    font-size: 0.95rem !important; 
+    color: #a5b4fc !important; 
+    min-height: 40px !important; 
+    display: flex !important; 
+    align-items: center !important; 
 }
-.status-text { font-size: 0.9rem !important; color: #a5b4fc !important; }
 footer { display: none !important; }
 """
 
@@ -574,9 +692,6 @@ def build_ui():
                     slot_src_status.append(s_stat)
                     slot_find_btns.append(s_btn)
 
-                # --- события ---
-
-                # изменение целевого фото: сброс слотов, если фото удалено
                 tgt_photo.change(
                     clear_target_and_slots,
                     [tgt_photo],
@@ -584,7 +699,6 @@ def build_ui():
                      *slot_src_previews, *slot_src_status],
                 )
 
-                # «Найти лица» — статус «⏳» + спиннер + результат
                 btn_find_tgt.click(
                     lambda: "⏳ Поиск лиц...",
                     None, tgt_status,
@@ -597,7 +711,6 @@ def build_ui():
                     show_progress="full",
                 )
 
-                # для каждого слота: найти лицо + сброс при смене/удалении фото замены
                 for i in range(MAX_FACES):
                     slot_find_btns[i].click(
                         detect_source_face,
@@ -641,6 +754,15 @@ def build_ui():
                             label="Качество кодирования",
                         )
                     with gr.Row():
+                        vid_res = gr.Dropdown(
+                            list(VIDEO_RESOLUTIONS.keys()), value="Как есть (оригинал)",
+                            label="Разрешение",
+                        )
+                        vid_fps = gr.Dropdown(
+                            list(VIDEO_FPS.keys()), value="Как есть (оригинал)",
+                            label="FPS",
+                        )
+                    with gr.Row():
                         vid_enhance = gr.Dropdown(
                             list(ENHANCE_STRENGTH.keys()), value="Среднее",
                             label="Резкость",
@@ -651,26 +773,90 @@ def build_ui():
                         )
                         keep_audio = gr.Checkbox(value=True, label="Сохранять звук")
 
-                gr.Markdown("### Лицо-источник")
+                # --- ИСТОЧНИК ---
+                gr.Markdown("### 1. Лицо-источник (с фото)")
                 vsrc = gr.Image(label="Фото лица", type="pil", height=200)
-                gr.Markdown("### Видео")
+                btn_find_src = gr.Button("🔍 Найти лица на фото", elem_classes=["secondary-btn"])
+                src_status = gr.Markdown("", elem_classes=["status-text"])
+                src_count = gr.State(0)
+                
+                src_face_slots = []
+                for i in range(MAX_FACES):
+                    with gr.Group(visible=False) as src_grp:
+                        with gr.Row():
+                            src_crop = gr.Image(label=f"Источник #{i+1}", height=100, interactive=False)
+                    src_face_slots.append(src_grp)
+                    src_face_slots.append(src_crop)
+                
+                src_grps_only = [src_face_slots[i] for i in range(0, len(src_face_slots), 2)]
+                src_crops_only = [src_face_slots[i] for i in range(1, len(src_face_slots), 2)]
+
+                # --- ВИДЕО ---
+                gr.Markdown("### 2. Видео")
                 tgt_video = gr.Video(label="Видео", height=220)
+                btn_find_vid = gr.Button("🔍 Найти лица в видео (быстро)", elem_classes=["secondary-btn"])
                 video_info = gr.Markdown("", elem_classes=["status-text"])
+                vid_status = gr.Markdown("", elem_classes=["status-text"])
+                vid_count = gr.State(0)
+
+                vid_face_slots = []
+                for i in range(MAX_FACES):
+                    with gr.Group(visible=False) as vid_grp:
+                        with gr.Row():
+                            vid_crop = gr.Image(label=f"Лицо в видео #{i+1}", height=100, interactive=False)
+                    vid_face_slots.append(vid_grp)
+                    vid_face_slots.append(vid_crop)
+                
+                vid_grps_only = [vid_face_slots[i] for i in range(0, len(vid_face_slots), 2)]
+                vid_crops_only = [vid_face_slots[i] for i in range(1, len(vid_face_slots), 2)]
+
                 with gr.Row():
                     start_sec = gr.Slider(0, 60, value=0, step=0.5, label="Начало (сек)")
                     end_sec = gr.Slider(0, 60, value=15, step=0.5, label="Конец (сек)")
+
+                # --- СОПОСТАВЛЕНИЕ ---
+                gr.Markdown("### 3. Сопоставление лиц")
+                with gr.Row():
+                    src_choice = gr.Dropdown(choices=[], label="Лицо из фото (Кого вставляем?)")
+                    vid_choice = gr.Dropdown(choices=[], label="Лицо в видео (Кому вставляем?)")
+
                 tgt_video.change(on_video_upload, [tgt_video], [start_sec, end_sec, video_info])
+
+                # События кнопок поиска
+                btn_find_src.click(
+                    lambda: "⏳ Поиск...", None, src_status, show_progress="hidden"
+                ).then(
+                    detect_src_faces,
+                    [vsrc, vid_det],
+                    [src_status, *src_crops_only, *src_grps_only, src_count, src_choice],
+                    show_progress="full",
+                )
+
+                btn_find_vid.click(
+                    lambda: "⏳ Сканирование видео...", None, vid_status, show_progress="hidden"
+                ).then(
+                    detect_video_faces,
+                    [tgt_video, vid_det],
+                    [vid_status, *vid_crops_only, *vid_grps_only, vid_count, vid_choice],
+                    show_progress="full",
+                )
+
                 btn_swap_v = gr.Button(
                     "✨ Заменить лица в видео", variant="primary",
                     elem_classes=["primary-btn"], size="lg",
                 )
                 out_video = gr.Video(label="Результат")
                 out_path_v = gr.Textbox(label="Файл", interactive=False)
+                
                 btn_swap_v.click(
-                    swap_video,
+                    swap_video_slots,
                     [vsrc, tgt_video, start_sec, end_sec,
-                     vid_det, detect_every, vid_enhance, vid_quality, keep_audio],
+                     vid_det, detect_every, vid_enhance, vid_quality, 
+                     vid_res, vid_fps, keep_audio,
+                     src_choice, vid_choice,
+                     src_count, vid_count],
                     [out_video, out_path_v],
+                    show_progress="full",
                 )
 
             # ===================== INPAINT =====================
