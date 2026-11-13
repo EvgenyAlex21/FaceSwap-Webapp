@@ -87,12 +87,129 @@ def _check_diffusers_inpaint() -> tuple[bool, str]:
     return True, ""
 
 
+def _inspect_tryoff_checkpoint(path: Path) -> dict:
+    """Определяет тип содержимого .safetensors: полный чекпоинт, LoRA, attention-веса или мусор."""
+    result = {"ok": False, "kind": "unknown", "reason": ""}
+    try:
+        from safetensors.torch import load_file
+    except Exception as e:
+        result["reason"] = f"Не удалось импортировать safetensors: {e}"
+        return result
+    try:
+        sd = load_file(str(path))
+    except Exception as e:
+        result["reason"] = f"Не удалось прочитать .safetensors: {e}"
+        return result
+    if not sd:
+        result["reason"] = "Файл пустой"
+        return result
+
+    keys = list(sd.keys())
+    has_unet = any(k.startswith("model.diffusion_model.") for k in keys)
+    has_first_stage = any(k.startswith("first_stage_model.") for k in keys)
+    is_lora = any(
+        ("lora" in k.lower()) or k.endswith(".lora_down.weight") or k.endswith(".lora_up.weight")
+        for k in keys
+    )
+    # TryOffAnyone: набор attention-весов вида 0.0.*, 1.0.*, ... (proj_in/proj_out/norm/to_q/to_k/to_v/to_out)
+    looks_like_attention = (
+        any(k.endswith(".proj_in.weight") or k.endswith(".proj_out.weight") for k in keys)
+        and any(("to_q" in k) or ("to_k" in k) or ("to_v" in k) or ("to_out" in k) for k in keys)
+    )
+
+    if has_unet and has_first_stage:
+        result.update(ok=True, kind="checkpoint")
+        return result
+    if is_lora:
+        result.update(ok=True, kind="lora")
+        return result
+    if looks_like_attention:
+        result.update(ok=True, kind="attention")
+        return result
+    result["reason"] = (
+        "Файл не похож ни на полный SD 1.5 inpaint-чекпоинт, ни на LoRA, "
+        "ни на attention-веса TryOffAnyone. "
+        f"Пример ключей: {keys[:5]}"
+    )
+    return result
+
+
+def _build_tryoffanyone_pipeline(local_model_file: Path, dtype):
+    """Собирает пайплайн TryOffAnyone по официальному рецепту:
+    SD 1.5 inpaint UNet + VAE sd-vae-ft-mse + fine-tuned attention weights,
+    cross-attention отключён (текст не используется).
+    """
+    import torch
+    from diffusers import (
+        AutoencoderKL,
+        DDIMScheduler,
+        StableDiffusionInpaintPipeline,
+        UNet2DConditionModel,
+    )
+    from diffusers.models.attention_processor import AttnProcessor
+
+    print("[InpaintAI] Сборка TryOffAnyone: SD 1.5 inpaint UNet + VAE + attention weights...")
+
+    # 1. Базовый UNet из SD 1.5 inpainting
+    unet = UNet2DConditionModel.from_pretrained(
+        "stable-diffusion-v1-5/stable-diffusion-inpainting",
+        subfolder="unet",
+        torch_dtype=dtype,
+    )
+
+    # 2. VAE — официальный TryOffAnyone использует sd-vae-ft-mse
+    vae = AutoencoderKL.from_pretrained(
+        "stabilityai/sd-vae-ft-mse",
+        torch_dtype=dtype,
+    )
+
+    # 3. Загружаем fine-tuned веса из локального файла
+    from safetensors.torch import load_file
+    state_dict = load_file(str(local_model_file))
+
+    # Пробуем загрузить как есть. Если ключи не подходят напрямую —
+    # используем set_attn_processor с кастомным процессором.
+    missing, unexpected = unet.load_state_dict(state_dict, strict=False)
+    print(f"[InpaintAI] TryOffAnyone: загружено весов, "
+          f"missing={len(missing)}, unexpected={len(unexpected)}")
+    if len(missing) > 0 and len(unexpected) == 0:
+        # Ничего не загрузилось — ключи не совпадают с именами UNet
+        raise RuntimeError(
+            "Веса tryOffAnyone не совпадают с UNet SD 1.5 inpaint. "
+            "Проверьте, что файл — официальный model.safetensors из "
+            "https://huggingface.co/ixarchakos/tryOffAnyone . "
+            f"Пример ключей в файле: {list(state_dict.keys())[:5]}"
+        )
+
+    # 4. Отключаем cross-attention (текстовый промпт не используется)
+    unet.set_attn_processor(AttnProcessor())
+
+    # 5. Scheduler
+    scheduler = DDIMScheduler.from_pretrained(
+        "stable-diffusion-v1-5/stable-diffusion-inpainting",
+        subfolder="scheduler",
+    )
+
+    # 6. Собираем пайплайн без text_encoder/tokenizer
+    pipe = StableDiffusionInpaintPipeline(
+        vae=vae,
+        text_encoder=None,
+        tokenizer=None,
+        unet=unet,
+        scheduler=scheduler,
+        safety_checker=None,
+        feature_extractor=None,
+        requires_safety_checker=False,
+    )
+    return pipe
+
+
 def get_inpaint_pipeline(device: str = "cuda", model_choice: str = "Realistic Vision (SD 1.5)"):
     global _pipe, _pipe_device, _pipe_model_name
 
     if "TryOffAnyone" in model_choice:
         local_model_file = MODELS / "tryOffAnyone.safetensors"
-        pipe_type = "sd15"
+        pipe_type = "tryoff"
     elif "LUSTIFY" in model_choice:
         local_model_file = MODELS / "lustifySDXLNSFW_v20-inpainting.safetensors"
         pipe_type = "sdxl"
@@ -121,43 +238,86 @@ def get_inpaint_pipeline(device: str = "cuda", model_choice: str = "Realistic Vi
     print(f"[InpaintAI] Загрузка ЛОКАЛЬНОЙ модели {local_model_file.name} ({pipe_type}) на {device}...")
 
     if pipe_type == "sdxl":
+        # SDXL: не передаём load_in_8bit (его нет в from_single_file),
+        # включаем memory-friendly режимы.
         pipe = StableDiffusionXLInpaintPipeline.from_single_file(
             str(local_model_file),
             torch_dtype=dtype,
             safety_checker=None,
-            load_in_8bit=True,
         )
-    else:
-        if "TryOffAnyone" in model_choice:
-            from transformers import CLIPTextModel, CLIPTokenizer
-            print("[InpaintAI] Подгрузка текстового энкодера для TryOffAnyone...")
-            text_encoder = CLIPTextModel.from_pretrained(
-                "stable-diffusion-v1-5/stable-diffusion-v1-5",
-                subfolder="text_encoder",
-                torch_dtype=dtype,
-            )
-            tokenizer = CLIPTokenizer.from_pretrained(
-                "stable-diffusion-v1-5/stable-diffusion-v1-5",
-                subfolder="tokenizer",
-            )
-            pipe = StableDiffusionInpaintPipeline.from_single_file(
-                str(local_model_file),
-                torch_dtype=dtype,
-                safety_checker=None,
-                text_encoder=text_encoder,
-                tokenizer=tokenizer,
-            )
-        else:
-            pipe = StableDiffusionInpaintPipeline.from_single_file(
-                str(local_model_file),
-                torch_dtype=dtype,
-                safety_checker=None,
-            )
+        print("[InpaintAI] SDXL: sequential offload + VAE slicing/tiling + attention slicing...")
+        try:
+            pipe.enable_sequential_cpu_offload()
+        except Exception as e:
+            print(f"[InpaintAI] sequential_cpu_offload: {e}")
+        try:
+            pipe.enable_vae_slicing()
+        except Exception:
+            pass
+        try:
+            pipe.enable_vae_tiling()
+        except Exception:
+            pass
+        try:
+            pipe.enable_attention_slicing("max")
+        except Exception:
+            pass
 
-    if pipe_type == "sdxl":
-        print("[InpaintAI] Включаем Sequential CPU Offload для SDXL (сохраняет память)...")
-        pipe.enable_sequential_cpu_offload()
+    elif pipe_type == "tryoff":
+        info = _inspect_tryoff_checkpoint(local_model_file)
+        if not info["ok"]:
+            raise RuntimeError(
+                "tryOffAnyone.safetensors не подходит ни для from_single_file, "
+                "ни для attention-весов.\n"
+                f"Причина: {info['reason']}\n"
+                "Официальный файл: https://huggingface.co/ixarchakos/tryOffAnyone/resolve/main/model.safetensors"
+            )
+        if info["kind"] == "checkpoint":
+            # На случай, если пользователь подложил полный SD 1.5 inpaint чекпоинт
+            pipe = StableDiffusionInpaintPipeline.from_single_file(
+                str(local_model_file),
+                torch_dtype=dtype,
+                safety_checker=None,
+            )
+            pipe = pipe.to(device)
+            try:
+                pipe.enable_attention_slicing()
+            except Exception:
+                pass
+        elif info["kind"] == "lora":
+            # LoRA: базовый SD 1.5 inpaint + load_lora_weights
+            print("[InpaintAI] tryOffAnyone определён как LoRA — накатываем на SD 1.5 inpaint...")
+            pipe = StableDiffusionInpaintPipeline.from_pretrained(
+                "stable-diffusion-v1-5/stable-diffusion-v1-5",
+                subfolder="",
+                torch_dtype=dtype,
+                safety_checker=None,
+            )
+            try:
+                pipe.load_lora_weights(str(local_model_file))
+            except Exception as e:
+                raise RuntimeError(f"Не удалось загрузить LoRA tryOffAnyone: {e}")
+            pipe = pipe.to(device)
+            try:
+                pipe.enable_attention_slicing()
+            except Exception:
+                pass
+        else:
+            # attention-веса: собираем пайплайн вручную
+            pipe = _build_tryoffanyone_pipeline(local_model_file, dtype)
+            pipe = pipe.to(device)
+            try:
+                pipe.enable_attention_slicing()
+            except Exception:
+                pass
+
     else:
+        # SD 1.5 обычный чекпоинт (Realistic Vision)
+        pipe = StableDiffusionInpaintPipeline.from_single_file(
+            str(local_model_file),
+            torch_dtype=dtype,
+            safety_checker=None,
+        )
         print("[InpaintAI] Переносим SD 1.5 на видеокарту...")
         pipe = pipe.to(device)
         try:
@@ -207,10 +367,17 @@ def inpaint_ai(
     device = "cuda" if prefer_cuda and torch.cuda.is_available() else "cpu"
     pipe = get_inpaint_pipeline(device, model_choice)
 
-    # Размер входа зависит от архитектуры (SDXL требует 1024, SD15 - 512/768)
-    #target_size = 1024 if "LUSTIFY" in model_choice else 768
-    #target_size = 768 if "LUSTIFY" in model_choice else 512
-    target_size = 512  # для всех моделей, чтобы гарантированно влезло в 4GB
+    # Размер входа зависит от архитектуры и объёма VRAM.
+    # Для 4 ГБ VRAM SDXL держим на 640 и ограничиваем шаги.
+    if "LUSTIFY" in model_choice:
+        target_size = 640
+        steps = min(int(steps), 20)
+    elif "TryOffAnyone" in model_choice:
+        # TryOffAnyone — SD 1.5, 512 — родное разрешение
+        target_size = 512
+    else:
+        target_size = 512
+
     img_r, m_r, (orig_w, orig_h) = _resize_for_diffusion(image_bgr, m, max_side=target_size)
 
     rgb = cv2.cvtColor(img_r, cv2.COLOR_BGR2RGB)
@@ -226,27 +393,36 @@ def inpaint_ai(
     # Обработка промптов
     actual_prompt = prompt
     actual_negative = negative
+    kwargs = {}
     
     if "TryOffAnyone" in model_choice:
-        # Эта модель не использует текстовый промпт, 
-        # но пайплайн может требовать передачи хоть какой-то строки.
-        actual_prompt = "high quality, detailed"
-        actual_negative = ""
+        # Эта модель не использует текстовый промпт (text_encoder=None).
+        # Передаём пустые тензоры эмбеддингов, чтобы пайплайн не пытался
+        # токенизировать строки через None-tokenizer.
+        # Размерность: (batch_size, seq_len, hidden_size) = (1, 77, 768) для SD 1.5
+        actual_prompt = None
+        actual_negative = None
+        kwargs["prompt_embeds"] = torch.zeros((1, 77, 768), dtype=torch.float16, device=device)
+        kwargs["negative_prompt_embeds"] = torch.zeros((1, 77, 768), dtype=torch.float16, device=device)
 
-    import torch, gc
+    import gc
     gc.collect()
     torch.cuda.empty_cache()
 
-    result = pipe(
-        prompt=actual_prompt,
-        negative_prompt=actual_negative,
-        image=pil_img,
-        mask_image=pil_mask,
-        num_inference_steps=int(steps),
-        guidance_scale=float(guidance),
-        strength=float(strength),
-        generator=gen,
-    ).images[0]
+    call_kwargs = {
+        "image": pil_img,
+        "mask_image": pil_mask,
+        "num_inference_steps": int(steps),
+        "guidance_scale": float(guidance),
+        "strength": float(strength),
+        "generator": gen,
+    }
+    if actual_prompt is not None:
+        call_kwargs["prompt"] = actual_prompt
+        call_kwargs["negative_prompt"] = actual_negative
+    call_kwargs.update(kwargs)
+
+    result = pipe(**call_kwargs).images[0]
 
     out = cv2.cvtColor(np.array(result), cv2.COLOR_RGB2BGR)
     out = cv2.resize(out, (orig_w, orig_h), interpolation=cv2.INTER_LANCZOS4)
