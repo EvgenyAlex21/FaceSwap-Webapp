@@ -19,7 +19,6 @@ def unique_name(prefix: str, ext: str) -> str:
 
 
 def copy_to_uploads(src: str | Path, prefix: str = "upload") -> Path:
-    """Копирует файл из temp Gradio в uploads/ — обход PermissionError на Windows."""
     src = Path(src)
     if not src.exists():
         raise FileNotFoundError(f"Файл не найден: {src}")
@@ -89,10 +88,7 @@ def _ffmpeg_exe() -> str | None:
 
 def merge_audio(video_no_audio: str | Path, source_video: str | Path,
                 start_sec: float = 0.0, end_sec: float = 0.0) -> Path:
-    """
-    Накладывает звук из исходного видео на обработанное (без звука).
-    Обрезает аудио по start/end, если задан отрезок.
-    """
+
     video_no_audio = Path(video_no_audio)
     source_video = Path(source_video)
     out_path = video_no_audio.with_name(video_no_audio.stem + "_audio.mp4")
@@ -101,7 +97,6 @@ def merge_audio(video_no_audio: str | Path, source_video: str | Path,
         print("[Audio] ffmpeg не найден — видео без звука")
         return video_no_audio
 
-    # -ss/-to на входном аудио-источнике
     cmd = [ff, "-y"]
     if start_sec and start_sec > 0:
         cmd += ["-ss", str(start_sec)]
@@ -110,7 +105,6 @@ def merge_audio(video_no_audio: str | Path, source_video: str | Path,
         cmd += ["-ss", str(start_sec)]
     cmd += ["-i", str(source_video)]
     if end_sec and end_sec > start_sec:
-        # длительность отрезка
         dur = float(end_sec) - float(start_sec or 0)
         cmd += ["-t", str(dur)]
 
@@ -136,7 +130,6 @@ def merge_audio(video_no_audio: str | Path, source_video: str | Path,
 
 
 def make_browser_compatible(video_path: str | Path, crf: int = 20, preset: str = "fast") -> Path:
-    """H.264 для превью в браузере. crf ниже = лучше качество (18–23)."""
     video_path = Path(video_path)
     out_path = video_path.with_name(video_path.stem + "_h264.mp4")
     ff = _ffmpeg_exe()
@@ -152,13 +145,11 @@ def make_browser_compatible(video_path: str | Path, crf: int = 20, preset: str =
         "-movflags", "+faststart",
         str(out_path),
     ]
-    # если аудио нет — не падаем
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         if r.returncode == 0 and out_path.exists() and out_path.stat().st_size > 1000:
             print(f"[Video] H.264 (crf={crf}): {out_path}")
             return out_path
-        # без аудиодорожки
         cmd = [
             ff, "-y", "-i", str(video_path),
             "-c:v", "libx264", "-preset", preset, "-crf", str(crf),

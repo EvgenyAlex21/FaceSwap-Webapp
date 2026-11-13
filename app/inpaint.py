@@ -1,8 +1,5 @@
-"""
-Региональный инпейнт по маске (кисть / ластик).
-Базовый режим — OpenCV (всегда работает).
-Опционально — AI-инпейнт (диффузия) с поддержкой локальных .safetensors моделей.
-"""
+# Региональный инпейнт по маске. AI-инпейнт (диффузия) с поддержкой локальных .safetensors моделей.
+
 
 from __future__ import annotations
 
@@ -18,7 +15,6 @@ from .utils import OUTPUTS, unique_name, write_image, MODELS
 
 
 def normalize_mask(mask: np.ndarray, target_hw: Tuple[int, int]) -> np.ndarray:
-    """Приводит маску к grayscale uint8 0/255 размера изображения."""
     if mask is None:
         raise ValueError("Маска пустая — закрасьте область кистью")
     m = mask
@@ -27,9 +23,7 @@ def normalize_mask(mask: np.ndarray, target_hw: Tuple[int, int]) -> np.ndarray:
     h, w = target_hw
     if m.shape[0] != h or m.shape[1] != w:
         m = cv2.resize(m, (w, h), interpolation=cv2.INTER_NEAREST)
-    # Бинаризация: всё > 10 считаем выделенным
     _, m = cv2.threshold(m.astype(np.uint8), 10, 255, cv2.THRESH_BINARY)
-    # Чуть расширим края маски для более гладкого шва
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     m = cv2.dilate(m, kernel, iterations=1)
     return m
@@ -55,11 +49,7 @@ def inpaint_region(
     radius: int = 7,
     refine: bool = True,
 ) -> Path:
-    """
-    Инпейнт выделенной области.
-    method: telea | ns
-    radius: радиус OpenCV inpaint (3–15)
-    """
+    
     result = inpaint_opencv(image_bgr, mask, method=method, radius=radius)
 
     if refine:
@@ -76,7 +66,7 @@ def inpaint_region(
     return out
 
 
-# === AI-инпейнт (диффузия) ================================
+# ================================ AI-инпейнт (диффузия) ================================
 
 _pipe = None
 _pipe_device = None
@@ -85,9 +75,9 @@ _pipe_model_name = None
 
 def _check_diffusers_inpaint() -> tuple[bool, str]:
     try:
-        import torch  # noqa: F401
-        from diffusers import StableDiffusionInpaintPipeline  # noqa: F401
-        from diffusers import StableDiffusionXLInpaintPipeline  # noqa: F401
+        import torch  
+        from diffusers import StableDiffusionInpaintPipeline  
+        from diffusers import StableDiffusionXLInpaintPipeline  
     except ImportError:
         return False, (
             "Для AI-инпейнта нужно:\n"
@@ -100,18 +90,16 @@ def _check_diffusers_inpaint() -> tuple[bool, str]:
 def get_inpaint_pipeline(device: str = "cuda", model_choice: str = "Realistic Vision (SD 1.5)"):
     global _pipe, _pipe_device, _pipe_model_name
 
-    # Определяем файл модели и тип пайплайна
     if "TryOffAnyone" in model_choice:
         local_model_file = MODELS / "tryOffAnyone.safetensors"
         pipe_type = "sd15"
     elif "LUSTIFY" in model_choice:
         local_model_file = MODELS / "lustifySDXLNSFW_v20-inpainting.safetensors"
         pipe_type = "sdxl"
-    else: # Realistic Vision
+    else: 
         local_model_file = MODELS / "realisticVisionV60B1_v50VAE-inpainting.safetensors"
         pipe_type = "sd15"
 
-    # Если модель уже загружена и это та же модель — возвращаем её
     if _pipe is not None and _pipe_device == device and _pipe_model_name == str(local_model_file):
         return _pipe
 
@@ -122,7 +110,6 @@ def get_inpaint_pipeline(device: str = "cuda", model_choice: str = "Realistic Vi
     import torch
     from diffusers import StableDiffusionInpaintPipeline, StableDiffusionXLInpaintPipeline
 
-    # ВАЖНО: dtype объявляется ДО его использования
     dtype = torch.float16 if device == "cuda" else torch.float32
 
     if not local_model_file.exists():
@@ -142,7 +129,6 @@ def get_inpaint_pipeline(device: str = "cuda", model_choice: str = "Realistic Vi
         )
     else:
         if "TryOffAnyone" in model_choice:
-            # Для TryOffAnyone подгружаем текстовый энкодер отдельно от SD 1.5
             from transformers import CLIPTextModel, CLIPTokenizer
             print("[InpaintAI] Подгрузка текстового энкодера для TryOffAnyone...")
             text_encoder = CLIPTextModel.from_pretrained(
@@ -168,7 +154,6 @@ def get_inpaint_pipeline(device: str = "cuda", model_choice: str = "Realistic Vi
                 safety_checker=None,
             )
 
-    # Логика выгрузки в память (вызывается ОДИН раз)
     if pipe_type == "sdxl":
         print("[InpaintAI] Включаем Sequential CPU Offload для SDXL (сохраняет память)...")
         pipe.enable_sequential_cpu_offload()
@@ -186,7 +171,6 @@ def get_inpaint_pipeline(device: str = "cuda", model_choice: str = "Realistic Vi
 
 
 def _resize_for_diffusion(img_bgr, mask, max_side=768):
-    """Приводим к кратному 8 и ограничиваем размер, чтобы влезло в VRAM."""
     h, w = img_bgr.shape[:2]
     scale = min(1.0, max_side / max(h, w))
     nw, nh = int(w * scale) // 8 * 8, int(h * scale) // 8 * 8
@@ -212,9 +196,7 @@ def inpaint_ai(
     prefer_cuda: bool = True,
     model_choice: str = "Realistic Vision (SD 1.5)",
 ) -> Path:
-    """
-    AI-инпейнт по маске. Использует выбранную модель.
-    """
+    
     import torch
     from PIL import Image
 
@@ -269,7 +251,6 @@ def inpaint_ai(
     out = cv2.cvtColor(np.array(result), cv2.COLOR_RGB2BGR)
     out = cv2.resize(out, (orig_w, orig_h), interpolation=cv2.INTER_LANCZOS4)
 
-    # Смешиваем только внутри маски (края — плавно), чтобы фон не поплыл
     alpha = cv2.GaussianBlur(m.astype(np.float32) / 255.0, (0, 0), 2.0)[..., None]
     final = (out.astype(np.float32) * alpha + image_bgr.astype(np.float32) * (1 - alpha))
     final = np.clip(final, 0, 255).astype(np.uint8)

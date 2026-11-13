@@ -1,4 +1,5 @@
-"""Ядро face-swap. GPU/CPU, звук в видео, качество."""
+# Ядро face-swap. GPU/CPU, звук в видео, качество.
+
 
 from __future__ import annotations
 
@@ -173,11 +174,8 @@ class FaceSwapper:
 
         width, height, fps, total_frames, duration = get_video_info(target_video_path)
         
-        # === ИЗМЕНЕНИЯ КАСАТЕЛЬНО РАЗРЕШЕНИЯ И FPS ===
-        # 1. Обработка FPS
         out_fps = float(target_fps) if target_fps > 0 else fps
         
-        # 2. Обработка разрешения (target_res - это высота, напр. 1080, 720)
         if target_res > 0 and target_res != height:
             scale = target_res / height
             out_w = int(width * scale) // 2 * 2
@@ -215,7 +213,6 @@ class FaceSwapper:
                 if not ret:
                     break
 
-                # Пропуск кадров для изменения FPS
                 if target_fps > 0 and abs(target_fps - fps) > 0.1:
                     if frame_idx % int(round(fps / target_fps)) != 0:
                         frame_idx += 1
@@ -242,7 +239,6 @@ class FaceSwapper:
                 if upscale > 1:
                     frame = upscale_image(frame, scale=upscale)
                 
-                # Приведение к выходному разрешению
                 if frame.shape[1] != out_w or frame.shape[0] != out_h:
                     frame = cv2.resize(frame, (out_w, out_h), interpolation=cv2.INTER_LANCZOS4)
 
@@ -261,10 +257,8 @@ class FaceSwapper:
         if progress_callback:
             progress_callback(0.88, "Кодирование H.264...")
 
-        # H.264
         video = make_browser_compatible(raw_path, crf=int(video_crf), preset="fast")
 
-        # Звук
         if keep_audio:
             if progress_callback:
                 progress_callback(0.94, "Добавление звука...")

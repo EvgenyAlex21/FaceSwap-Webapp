@@ -14,29 +14,42 @@ MODELS_DIR.mkdir(exist_ok=True)
 
 # Основные модели
 MODELS = {
-    # Детектор + распознавание (buffalo_l)
     "buffalo_l.zip": "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip",
-    # InSwapper (основная модель замены лица)
     "inswapper_128.onnx": "https://huggingface.co/ezioruan/inswapper_128.onnx/resolve/main/inswapper_128.onnx",
 }
 
-# Опциональные (улучшение лица)
+# Опциональные (для вкладки "Выделение" / Инпейнт)
 OPTIONAL = {
-    # Можно добавить GFPGAN / CodeFormer позже
+    "realisticVisionV60B1_v50VAE-inpainting.safetensors": "https://huggingface.co/AdamLucek/Realistic-Vision-V60B1-Inpainting/resolve/main/realisticVisionV60B1_v50VAE-inpainting.safetensors?download=true",
+    "lustifySDXLNSFW_v20-inpainting.safetensors": "https://huggingface.co/andro-flock/LUSTIFY-SDXL-NSFW-checkpoint-v2-0-INPAINTING/resolve/main/lustifySDXLNSFW_v20-inpainting.safetensors?download=true",
+    "tryOffAnyone.safetensors": "https://huggingface.co/ixarchakos/tryOffAnyone/resolve/main/model.safetensors?download=true",
 }
 
 
 def download_file(url: str, dest: Path, force: bool = False):
     if dest.exists() and not force:
-        print(f"[skip] {dest.name} уже существует")
-        return
+        if dest.stat().st_size > 1024 * 1024:
+            print(f"[skip] {dest.name} уже существует")
+            return
+        else:
+            print(f"[warn] {dest.name} слишком маленький, перекачиваем...")
+            dest.unlink()
 
     print(f"[download] {dest.name} ...")
     try:
-        urllib.request.urlretrieve(url, dest)
-        print(f"[ok] {dest.name}")
+        def _report(block_num, block_size, total_size):
+            if total_size > 0:
+                percent = int(block_num * block_size * 100 / total_size)
+                if percent % 10 == 0:
+                    sys.stdout.write(f"\r  ... {percent}%")
+                    sys.stdout.flush()
+
+        urllib.request.urlretrieve(url, dest, reporthook=_report)
+        print(f"\n[ok] {dest.name}")
     except Exception as e:
-        print(f"[error] Не удалось скачать {dest.name}: {e}")
+        print(f"\n[error] Не удалось скачать {dest.name}: {e}")
+        if dest.exists():
+            dest.unlink()
         sys.exit(1)
 
 
@@ -56,15 +69,20 @@ def main():
     force = "--force" in sys.argv
     print("=== Local Face Swap — загрузка моделей ===\n")
 
-    # buffalo_l
+    # 1. Основные модели (Face Swap)
+    print("--- Основные модели (Face Swap) ---")
     buffalo_zip = MODELS_DIR / "buffalo_l.zip"
     download_file(MODELS["buffalo_l.zip"], buffalo_zip, force)
     extract_buffalo(buffalo_zip)
 
-    # inswapper
     download_file(MODELS["inswapper_128.onnx"], MODELS_DIR / "inswapper_128.onnx", force)
 
-    print("\n=== Готово! Модели лежат в папке models/ ===")
+    # 2. Опциональные модели (Инпейнт)
+    print("\n--- Модели для Инпейнта (Выделение) ---")
+    for filename, url in OPTIONAL.items():
+        download_file(url, MODELS_DIR / filename, force)
+
+    print("\n=== Готово! Все модели лежат в папке models/ ===")
     print("Теперь можно запускать: python app/main.py")
 
 

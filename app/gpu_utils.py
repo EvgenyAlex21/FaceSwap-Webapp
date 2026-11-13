@@ -1,7 +1,5 @@
-"""
-Диагностика CUDA для onnxruntime.
-Важно: не ломаем PyTorch — не засоряем PATH чужим cuDNN.
-"""
+# Диагностика CUDA для onnxruntime.
+
 
 from __future__ import annotations
 
@@ -38,10 +36,6 @@ def _find_nvidia_dll_dirs() -> List[Path]:
 
 
 def add_nvidia_dll_directories():
-    """
-    Windows: os.add_dll_directory — безопаснее, чем править PATH.
-    PATH не трогаем: иначе PyTorch может подхватить чужой cuDNN и упасть.
-    """
     if sys.platform != "win32":
         return
     dirs = _find_nvidia_dll_dirs()
@@ -129,7 +123,6 @@ def setup_device(verbose: bool = True) -> Tuple[str, List[Any]]:
     ok, err = _test_cuda_session()
     if ok:
         _log("[GPU] CUDA: OK — face-swap на видеокарте")
-        # torch отдельно
         try:
             import torch
             _log(f"[GPU] torch {torch.__version__}, cuda.is_available={torch.cuda.is_available()}")

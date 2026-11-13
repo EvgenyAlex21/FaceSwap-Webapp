@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local Face Swap — персональные настройки по вкладкам, слоты лиц на фото."""
+"""Local Face Swap """
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from PIL import Image
 
 from app.swapper import get_swapper
 from app.utils import OUTPUTS, unique_name, write_image, get_video_info, copy_to_uploads
-from app.inpaint import inpaint_region, inpaint_ai  
+from app.inpaint import inpaint_region, inpaint_ai
 
 MAX_FACES = 6
 
@@ -145,7 +145,7 @@ def detect_target_faces(target_img, det_mode):
 
     if not faces:
         return (
-            "❌ Лица не найдены на целевом фото",
+            "Лица не найдены на целевом фото",
             *empty, *hidden, 0, *clear_prev, *clear_stat,
         )
 
@@ -161,7 +161,7 @@ def detect_target_faces(target_img, det_mode):
             vis.append(gr.update(visible=False))
 
     return (
-        f"✅ Найдено лиц: **{len(faces)}** — загрузите замену для каждого",
+        f"Найдено лиц: **{len(faces)}** — загрузите замену для каждого",
         *crops,
         *vis,
         len(faces),
@@ -197,9 +197,9 @@ def detect_source_face(src_img, det_mode):
     bgr = _to_bgr(src_img)
     faces = sw.get_faces(bgr)
     if not faces:
-        return None, "❌ Лицо не найдено"
+        return None, "Лицо не найдено"
     crop = _crop_face(bgr, faces[0])
-    return _to_pil(crop), "✅ Лицо найдено"
+    return _to_pil(crop), "Лицо найдено"
 
 
 def source_changed(src_img):
@@ -339,7 +339,7 @@ def detect_video_faces(video_path, det_mode, progress=gr.Progress(track_tqdm=Fal
     cap.release()
     
     if not unique_faces:
-        return "❌ Лица в видео не найдены", *[None]*MAX_FACES, *[gr.update(visible=False)]*MAX_FACES, 0, gr.update(choices=[], value=None)
+        return "Лица в видео не найдены", *[None]*MAX_FACES, *[gr.update(visible=False)]*MAX_FACES, 0, gr.update(choices=[], value=None)
 
     vis = [gr.update(visible=True)] * len(unique_faces) + [gr.update(visible=False)] * (MAX_FACES - len(unique_faces))
     crops_padded = crops + [None] * (MAX_FACES - len(crops))
@@ -347,7 +347,7 @@ def detect_video_faces(video_path, det_mode, progress=gr.Progress(track_tqdm=Fal
     choices = [f"Лицо #{i+1}" for i in range(len(unique_faces))]
     
     return (
-        f"✅ Найдено уникальных лиц: **{len(unique_faces)}**",
+        f"Найдено уникальных лиц: **{len(unique_faces)}**",
         *crops_padded,
         *vis,
         len(unique_faces),
@@ -364,7 +364,7 @@ def detect_src_faces(src_img, det_mode):
     faces = sw.get_faces(bgr)
     
     if not faces:
-        return "❌ Лица на фото не найдены", *[None]*MAX_FACES, *[gr.update(visible=False)]*MAX_FACES, 0, gr.update(choices=[], value=None)
+        return "Лица на фото не найдены", *[None]*MAX_FACES, *[gr.update(visible=False)]*MAX_FACES, 0, gr.update(choices=[], value=None)
 
     crops = []
     vis = []
@@ -379,7 +379,7 @@ def detect_src_faces(src_img, det_mode):
     choices = [f"Лицо #{i+1}" for i in range(len(faces))]
     
     return (
-        f"✅ Найдено лиц: **{len(faces)}**",
+        f"Найдено лиц: **{len(faces)}**",
         *crops,
         *vis,
         len(faces),
@@ -513,10 +513,8 @@ def run_inpaint(editor_data, method, radius,
     progress(0.15, desc="Маска создана. Подготовка модели...")
 
     try:
-        # Проверяем, загружена ли уже модель, чтобы показать правильный статус
         from app.inpaint import _pipe, _pipe_model_name, MODELS
         
-        # Определяем ожидаемый путь модели
         if "TryOffAnyone" in model_choice:
             local_model_file = MODELS / "tryOffAnyone.safetensors"
         elif "LUSTIFY" in model_choice:
@@ -545,130 +543,292 @@ def run_inpaint(editor_data, method, radius,
 
 
 CUSTOM_CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-.gradio-container { max-width: 1200px !important; margin: 0 auto !important; font-family: 'Inter', system-ui, sans-serif !important; }
-.main-header {
-    text-align: center; padding: 28px 24px 16px;
-    background: linear-gradient(145deg, #0c0a1d 0%, #1a1440 40%, #0f172a 100%);
-    border-radius: 18px; margin-bottom: 18px;
-    border: 1px solid rgba(167,139,250,0.15);
-}
-.main-header h1 {
-    font-size: 2rem !important; font-weight: 700 !important;
-    background: linear-gradient(105deg, #c4b5fd, #67e8f9, #6ee7b7);
-    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    margin: 0 0 6px 0 !important;
-}
-.main-header p { color: #94a3b8 !important; font-size: 0.9rem !important; margin: 0 !important; }
-.primary-btn {
-    background: linear-gradient(135deg, #7c3aed, #4f46e5) !important;
-    border: none !important; color: white !important; font-weight: 600 !important;
-    border-radius: 12px !important; padding: 14px 28px !important;
-}
-.secondary-btn {
-    background: rgba(255,255,255,0.05) !important;
-    border: 1px solid rgba(255,255,255,0.1) !important;
-    color: #e2e8f0 !important;
-    border-radius: 10px !important;
-}
-.status-text { 
-    font-size: 1.05rem !important; 
-    color: #a5b4fc !important; 
-    min-height: 50px !important; 
-    display: flex !important; 
-    align-items: center !important; 
-    margin-top: 10px !important;
-    font-weight: 500 !important;
-}
-.tips {
-    background: rgba(15,23,42,0.75); border: 1px solid rgba(167,139,250,0.12);
-    border-radius: 14px; padding: 14px 18px; margin-top: 16px;
-    color: #94a3b8; font-size: 0.86rem; line-height: 1.5;
-}
-.tips strong { color: #c4b5fd; }
-.tips code { background: rgba(124,58,237,0.15); padding: 2px 6px; border-radius: 6px; color: #a5b4fc; }
-/* Увеличиваем спиннер загрузки */
-.wrap.default .progress-text {
-    font-size: 1.2rem !important;
-    padding: 12px 20px !important;
-}
-.loader, .spinner {
-    width: 40px !important;
-    height: 40px !important;
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&display=swap');
+
+:root {
+    --ink: #E8EEF7;
+    --muted: #94A5BE;
+    --line: #243B5C;
+    --panel: #0F1D33;
+    --panel-2: #0A1629;
+    --accent: #3BB5D6;
+    --grad: linear-gradient(120deg, #2D6BDB 0%, #1B9BC0 58%, #19A7A0 100%);
+    --serif: 'Source Serif 4', Georgia, 'Times New Roman', serif;
 }
 
-/* --- Центрирование вкладок с одинаковым расстоянием --- */
-.tabs {
-    display: flex !important;
-    justify-content: center !important;
-    gap: 40px !important; /* Регулирует расстояние между вкладками */
+body {
+    background:
+        radial-gradient(1100px 560px at 92% -8%, rgba(27, 155, 192, 0.20), transparent 60%),
+        radial-gradient(900px 520px at -8% 6%, rgba(45, 107, 219, 0.22), transparent 58%),
+        linear-gradient(180deg, #091426 0%, #0B1B31 100%) !important;
+    background-attachment: fixed !important;
 }
-.tab-nav {
-    display: flex !important;
-    justify-content: center !important;
-    gap: 40px !important;
+
+.gradio-container {
+    background: transparent !important;
+    max-width: 1120px !important;
+    margin: 0 auto !important;
+    padding: 0 24px 48px !important;
+    font-family: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif !important;
+    color: var(--ink);
 }
+
+/* ---------- Шапка ---------- */
+.app-header {
+    display: flex; align-items: center; justify-content: space-between; gap: 28px;
+    margin: 28px 0 22px; padding: 30px 36px;
+    border-radius: 14px;
+    background: linear-gradient(115deg, #14335F 0%, #1B5A8E 52%, #167F88 100%);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+}
+.gradio-container .app-header h1 {
+    font-family: var(--serif) !important; font-weight: 600 !important;
+    font-size: 2rem !important; letter-spacing: -0.01em;
+    color: #FFFFFF !important; margin: 0 0 4px 0 !important;
+}
+.gradio-container .app-header p { margin: 0 !important; color: rgba(255, 255, 255, 0.82) !important; font-size: 0.97rem !important; }
+.gradio-container .app-header .header-note {
+    max-width: 330px; padding-left: 24px; border-left: 1px solid rgba(255, 255, 255, 0.28);
+    font-size: 0.83rem !important; line-height: 1.55; color: rgba(255, 255, 255, 0.78) !important;
+}
+
+/* ---------- Вкладки ---------- */
+.tabs [role="tablist"], .tab-nav, .tab-wrapper { justify-content: center !important; }
+.tabs button[role="tab"] {
+    font-family: inherit !important; font-size: 0.97rem !important; font-weight: 500 !important;
+    color: var(--muted) !important; background: transparent !important;
+    padding: 10px 4px !important; margin: 0 20px !important;
+    border: none !important; border-radius: 0 !important;
+}
+.tabs button[role="tab"]:hover { color: var(--ink) !important; }
+.tabs button[role="tab"][aria-selected="true"] {
+    color: #FFFFFF !important;
+    background: transparent var(--grad) no-repeat bottom / 100% 2px !important;
+}
+
+/* ---------- Инструкция ---------- */
+.gradio-container .guide {
+    display: grid; grid-template-columns: 200px 1fr; gap: 8px 32px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 22px 26px; margin: 18px 0 22px;
+}
+.gradio-container .guide h2 {
+    font-family: var(--serif) !important; font-size: 1.15rem !important; font-weight: 600 !important;
+    color: #FFFFFF !important; margin: 0 !important; border: none !important;
+}
+.gradio-container .guide p { margin: 0 0 10px; color: var(--ink); font-size: 0.93rem; line-height: 1.6; }
+.gradio-container .guide ol { margin: 0 0 12px; padding-left: 20px; color: var(--ink); font-size: 0.93rem; line-height: 1.65; }
+.gradio-container .guide ol li::marker { color: var(--accent); font-weight: 600; }
+.gradio-container .guide strong { font-weight: 600; color: #FFFFFF; }
+.gradio-container .guide .guide-note {
+    margin: 0; padding-top: 12px; border-top: 1px solid var(--line);
+    color: var(--muted); font-size: 0.86rem; line-height: 1.6;
+}
+
+/* ---------- Заголовки разделов и подсказки ---------- */
+.gradio-container .section-title h3 {
+    font-family: var(--serif) !important; font-size: 1.25rem !important; font-weight: 600 !important;
+    color: #FFFFFF !important; letter-spacing: -0.005em; margin: 26px 0 2px 0 !important;
+}
+.gradio-container .hint, .gradio-container .hint p {
+    color: var(--muted) !important; font-size: 0.9rem !important; line-height: 1.55;
+}
+.gradio-container .hint strong { color: var(--ink); }
+.status-text {
+    min-height: 28px !important; display: flex !important; align-items: center !important;
+    margin-top: 6px !important; color: #9FD8EA !important;
+    font-size: 0.93rem !important; font-weight: 500 !important;
+}
+
+/* ---------- Убираем лишние скроллбары в Markdown и HTML ---------- */
+.prose, .prose pre, .prose code, .md, .html-container {
+    overflow: visible !important;
+    overflow-x: visible !important;
+    overflow-y: visible !important;
+    height: auto !important;
+    max-height: none !important;
+}
+
+/* ---------- Группы (слоты лиц) ---------- */
+.gradio-container .gr-group { background: var(--panel) !important; border: 1px solid var(--line) !important; }
+.gradio-container .gr-group .styler, .gradio-container .form { background: transparent !important; }
+.gradio-container .gr-group .prose { padding: 10px 14px 2px !important; }
+
+/* ---------- Кнопки ---------- */
+.primary-btn {
+    background: var(--grad) !important; border: none !important;
+    color: #fff !important; font-weight: 500 !important; letter-spacing: 0.01em;
+    border-radius: 8px !important; padding: 14px 28px !important;
+}
+.primary-btn:hover { filter: brightness(1.1); }
+.secondary-btn {
+    background: rgba(255, 255, 255, 0.04) !important; border: 1px solid #2F4A70 !important;
+    color: var(--ink) !important; font-weight: 500 !important; border-radius: 8px !important;
+}
+.secondary-btn:hover { border-color: var(--accent) !important; color: #8FDBF0 !important; }
+.gradio-container button:focus-visible,
+.gradio-container input:focus-visible,
+.gradio-container textarea:focus-visible {
+    outline: 2px solid var(--accent) !important; outline-offset: 2px;
+}
+
+/* ---------- Индикатор загрузки ---------- */
+[data-testid="status-tracker"].wrap.default {
+    background: rgba(9, 20, 38, 0.80) !important;
+    backdrop-filter: blur(3px);
+    border-radius: 10px;
+}
+[data-testid="status-tracker"] .eta-bar {
+    background: var(--grad) !important; opacity: 0.16 !important;
+}
+[data-testid="status-tracker"] .margin { transform: scale(2.8); transform-origin: center; }
+[data-testid="status-tracker"] .progress-text {
+    position: absolute !important; left: 0 !important; right: 0 !important; bottom: 18px !important;
+    text-align: center !important; padding: 0 16px !important;
+    font-family: inherit !important; font-size: 0.95rem !important; color: #BFD9F2 !important;
+}
+
+/* ---------- Нижняя заметка ---------- */
+.gradio-container .footnote {
+    margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--line);
+    color: var(--muted); font-size: 0.82rem; line-height: 1.6;
+}
+.gradio-container .footnote code { background: #16294A; padding: 1px 6px; border-radius: 4px; color: #BFD9F2; }
+
 footer { display: none !important; }
+
+@media (max-width: 760px) {
+    .gradio-container .guide { grid-template-columns: 1fr; }
+    .app-header { flex-direction: column; align-items: flex-start; padding: 24px; }
+    .gradio-container .app-header .header-note { padding-left: 0; border-left: none; }
+    .tabs button[role="tab"] { margin: 0 10px !important; }
+}
+@media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+}
 """
 
 
+def _guide(title_text, intro, steps, note):
+    items = "".join(f"<li>{s}</li>" for s in steps)
+    return (
+        '<div class="guide">'
+        f'<h2>{title_text}</h2>'
+        '<div>'
+        f'<p>{intro}</p>'
+        f'<ol>{items}</ol>'
+        f'<p class="guide-note">{note}</p>'
+        '</div></div>'
+    )
+
+
 def build_ui():
+    ink, muted, line = "#E8EEF7", "#94A5BE", "#243B5C"
+    panel, field = "#0F1D33", "#0A1629"
+    sapphire = gr.themes.Color(
+        c50="#EAF3FB", c100="#CFE3F5", c200="#A3CBEB", c300="#6FB0DE", c400="#3BB5D6",
+        c500="#2D8FD0", c600="#2D6BDB", c700="#24509F", c800="#1B3A73", c900="#142B55", c950="#0C1B38",
+    )
+    slate_blue = gr.themes.Color(
+        c50="#F1F5FA", c100="#DCE5F1", c200="#B7C5DA", c300="#94A5BE", c400="#6F82A0",
+        c500="#4F6482", c600="#3A4E6C", c700="#2A3E5D", c800="#1B2D49", c900="#0F1D33", c950="#0A1629",
+    )
     theme = gr.themes.Base(
-        primary_hue="violet", secondary_hue="slate", neutral_hue="slate",
-        font=gr.themes.GoogleFont("Inter"),
+        primary_hue=sapphire, secondary_hue=slate_blue, neutral_hue=slate_blue,
+        font=[gr.themes.GoogleFont("IBM Plex Sans"), "ui-sans-serif", "system-ui", "sans-serif"],
     ).set(
-        body_background_fill="#080b14", body_background_fill_dark="#080b14",
-        block_background_fill="#0f1320", block_background_fill_dark="#0f1320",
-        border_color_primary="#1e293b", block_border_width="1px", block_radius="14px",
-        button_primary_background_fill="linear-gradient(135deg, #7c3aed, #4f46e5)",
-        button_primary_text_color="white", input_background_fill="#0a0e1a",
+        body_background_fill="#0A1526", body_background_fill_dark="#0A1526",
+        body_text_color=ink, body_text_color_dark=ink,
+        body_text_color_subdued=muted, body_text_color_subdued_dark=muted,
+        background_fill_primary=panel, background_fill_primary_dark=panel,
+        background_fill_secondary=field, background_fill_secondary_dark=field,
+        block_background_fill=panel, block_background_fill_dark=panel,
+        block_border_color=line, block_border_color_dark=line,
+        border_color_primary=line, border_color_primary_dark=line,
+        border_color_accent="#3BB5D6", border_color_accent_dark="#3BB5D6",
+        block_border_width="1px", block_radius="10px",
+        block_shadow="none", block_shadow_dark="none",
+        block_label_background_fill=panel, block_label_background_fill_dark=panel,
+        block_label_text_color=muted, block_label_text_color_dark=muted,
+        block_title_text_color=ink, block_title_text_color_dark=ink,
+        block_info_text_color=muted, block_info_text_color_dark=muted,
+        input_background_fill=field, input_background_fill_dark=field,
+        input_border_color="#2A4268", input_border_color_dark="#2A4268",
+        input_placeholder_color="#5F7392", input_placeholder_color_dark="#5F7392",
+        input_radius="8px",
+        loader_color="#3BB5D6", loader_color_dark="#3BB5D6",
+        slider_color="#2D8FD0", slider_color_dark="#2D8FD0",
+        checkbox_background_color=field, checkbox_background_color_dark=field,
+        checkbox_background_color_selected="#2D6BDB", checkbox_background_color_selected_dark="#2D6BDB",
+        checkbox_border_color="#2A4268", checkbox_border_color_dark="#2A4268",
+        button_primary_background_fill="#2D6BDB", button_primary_background_fill_dark="#2D6BDB",
+        button_primary_background_fill_hover="#2D6BDB", button_primary_background_fill_hover_dark="#2D6BDB",
+        button_primary_text_color="#FFFFFF", button_primary_text_color_dark="#FFFFFF",
+        button_secondary_background_fill=field, button_secondary_background_fill_dark=field,
+        button_secondary_text_color=ink, button_secondary_text_color_dark=ink,
+        button_large_radius="8px", button_small_radius="8px",
     )
 
     with gr.Blocks(title="Local Face Swap") as demo:
         gr.HTML("""
-        <div class="main-header">
-            <h1>Local Face Swap</h1>
-            <p>Замена лиц · Видео со звуком · Выделение</p>
+        <div class="app-header">
+            <div>
+                <h1>Local Face Swap</h1>
+                <p>Замена лиц на фото и видео, умное выделение</p>
+            </div>
+            <p class="header-note">Обработка выполняется на вашем компьютере. Исходные файлы не передаются во внешние сервисы.</p>
         </div>
         """)
 
         with gr.Tabs():
             # ===================== PHOTO =====================
-            with gr.TabItem("🖼  Фото"):
+            with gr.TabItem("Фото"):
                 with gr.Column(elem_classes=["tab-container"]):
-                    with gr.Accordion("⚙️ Настройки", open=True):
+                    gr.HTML(_guide(
+                        "Как это работает",
+                        "Программа находит лица на целевом фото и заменяет каждое из них лицом с загруженного вами снимка.",
+                        [
+                            "Проверьте параметры обработки. Значения по умолчанию подходят для большинства фотографий.",
+                            "Загрузите целевое фото и нажмите «Найти лица».",
+                            "Для каждого найденного лица загрузите фото замены и нажмите «Найти лицо», чтобы проверить превью.",
+                            "Нажмите «Заменить лица». Результат появится ниже и сохранится в папке <strong>outputs/</strong>.",
+                        ],
+                        "Для максимальной детализации выберите детекцию «Качественный (640)» или «Максимум (800)» и резкость «Среднее» или «Сильное». "
+                        "Для быстрого результата — детекцию «Быстрый (320)» или «Баланс (480)». "
+                        "Размер готового изображения приводится к 1920 px по длинной стороне.",
+                    ))
+
+                    photo_quality = gr.State("Full HD (1920)")
+
+                    with gr.Accordion("Параметры обработки", open=True):
                         with gr.Row():
                             photo_det = gr.Dropdown(
                                 list(DET_SIZES.keys()), value="Качественный (640)",
                                 label="Детекция лиц",
+                                info="Точность поиска лиц. Выше значение — точнее, но медленнее",
                             )
-                            photo_quality = gr.Dropdown(
-                                list(PHOTO_QUALITY.keys()),
-                                value="Full HD (1920)",
-                                label="Качество результата",
-                                info="Длинная сторона кадра",
-                            )
-                        with gr.Row():
                             photo_enhance = gr.Dropdown(
                                 list(ENHANCE_STRENGTH.keys()), value="Среднее",
                                 label="Резкость",
+                                info="Степень улучшения деталей лица",
                             )
                             photo_format = gr.Radio(
                                 ["PNG", "JPG"], value="PNG", label="Формат файла",
+                                info="PNG — без потерь, JPG — компактнее",
                             )
 
-                    gr.Markdown("### 1. Целевое фото")
-                    gr.Markdown("Фото, **на котором** нужно заменить лица", elem_classes=["status-text"])
+                    gr.Markdown("### 1. Целевое фото", elem_classes=["section-title"])
+                    gr.Markdown("Фото, **на котором** нужно заменить лица.", elem_classes=["hint"])
                     tgt_photo = gr.Image(label="Целевое фото", type="pil", height=320)
-                    btn_find_tgt = gr.Button("🔍 Найти лица", elem_classes=["secondary-btn"])
+                    btn_find_tgt = gr.Button("Найти лица", elem_classes=["secondary-btn"])
                     tgt_status = gr.Markdown("", elem_classes=["status-text"])
                     face_count = gr.State(0)
 
-                    gr.Markdown("### 2. Замена для каждого найденного лица")
+                    gr.Markdown("### 2. Замена для каждого найденного лица", elem_classes=["section-title"])
                     gr.Markdown(
-                        "Сверху — лицо с целевого фото. Ниже загрузите фото человека, "
-                        "чьё лицо нужно подставить. «Найти лицо» покажет превью.",
-                        elem_classes=["status-text"],
+                        "Слева — лицо с целевого фото. Справа загрузите фото человека, "
+                        "чьё лицо нужно подставить. Кнопка «Найти лицо» покажет превью.",
+                        elem_classes=["hint"],
                     )
 
                     slot_targets = []
@@ -714,7 +874,7 @@ def build_ui():
                     )
 
                     btn_find_tgt.click(
-                        lambda: "⏳ Поиск лиц...",
+                        lambda: "Поиск лиц...",
                         None, tgt_status,
                         show_progress="hidden",
                     ).then(
@@ -723,6 +883,7 @@ def build_ui():
                         [tgt_status, *slot_targets, *slot_groups, face_count,
                          *slot_src_previews, *slot_src_status],
                         show_progress="full",
+                        show_progress_on=[tgt_photo],
                     )
 
                     for i in range(MAX_FACES):
@@ -731,6 +892,7 @@ def build_ui():
                             [slot_sources[i], photo_det],
                             [slot_src_previews[i], slot_src_status[i]],
                             show_progress="full",
+                            show_progress_on=[slot_sources[i]],
                         )
                         slot_sources[i].change(
                             source_changed,
@@ -738,8 +900,9 @@ def build_ui():
                             [slot_src_previews[i], slot_src_status[i]],
                         )
 
+                    gr.Markdown("### 3. Результат", elem_classes=["section-title"])
                     btn_swap_photo = gr.Button(
-                        "✨ Заменить лица", variant="primary",
+                        "Заменить лица", variant="primary",
                         elem_classes=["primary-btn"], size="lg",
                     )
                     out_photo = gr.Image(label="Результат", height=400)
@@ -753,20 +916,38 @@ def build_ui():
                         ],
                         [out_photo, out_path_p],
                         show_progress="full",
+                        show_progress_on=[out_photo],
                     )
 
             # ===================== VIDEO =====================
-            with gr.TabItem("🎬  Видео"):
+            with gr.TabItem("Видео"):
                 with gr.Column(elem_classes=["tab-container"]):
-                    with gr.Accordion("⚙️ Настройки видео", open=True):
+                    gr.HTML(_guide(
+                        "Как это работает",
+                        "Программа заменяет выбранное лицо в видео лицом с вашего фото. Оригинальный звук можно сохранить.",
+                        [
+                            "Проверьте параметры обработки. Значения по умолчанию подходят для большинства роликов.",
+                            "Загрузите фото с лицом-источником и нажмите «Найти лица на фото».",
+                            "Загрузите видео, нажмите «Найти лица в видео» и задайте начало и конец обрабатываемого фрагмента.",
+                            "В разделе «Сопоставление лиц» выберите, чьё лицо вставляем и кому.",
+                            "Нажмите «Заменить лица в видео». Готовый файл сохранится в папке <strong>outputs/</strong>.",
+                        ],
+                        "Для лучшего результата: детекция «Качественный (640)» или «Максимум (800)», резкость «Среднее» или «Сильное», "
+                        "кодирование CRF 18–20, детекция на каждом кадре. Для быстрого черновика: детекция 320–480, "
+                        "каждые 2–3 кадра, CRF 23–26. Скорость зависит от видеокарты: без CUDA обработка занимает заметно больше времени.",
+                    ))
+
+                    with gr.Accordion("Параметры обработки", open=True):
                         with gr.Row():
                             vid_det = gr.Dropdown(
                                 list(DET_SIZES.keys()), value="Качественный (640)",
                                 label="Детекция лиц",
+                                info="Точность поиска лиц. Выше значение — точнее, но медленнее",
                             )
                             vid_quality = gr.Dropdown(
                                 list(VIDEO_QUALITY.keys()), value="Хорошее (CRF 20)",
                                 label="Качество кодирования",
+                                info="Чем меньше CRF, тем выше качество и больше размер файла",
                             )
                         with gr.Row():
                             vid_res = gr.Dropdown(
@@ -781,20 +962,23 @@ def build_ui():
                             vid_enhance = gr.Dropdown(
                                 list(ENHANCE_STRENGTH.keys()), value="Среднее",
                                 label="Резкость",
+                                info="Степень улучшения деталей лица",
                             )
                             detect_every = gr.Slider(
                                 1, 5, value=1, step=1,
                                 label="Детекция каждые N кадров",
+                                info="1 — каждый кадр (точнее), 2–5 — быстрее",
                             )
                             keep_audio = gr.Checkbox(value=True, label="Сохранять звук")
 
                     # --- ИСТОЧНИК ---
-                    gr.Markdown("### 1. Лицо-источник (с фото)")
+                    gr.Markdown("### 1. Лицо-источник (с фото)", elem_classes=["section-title"])
+                    gr.Markdown("Фото человека, чьё лицо нужно вставить в видео.", elem_classes=["hint"])
                     vsrc = gr.Image(label="Фото лица", type="pil", height=200)
-                    btn_find_src = gr.Button("🔍 Найти лица на фото", elem_classes=["secondary-btn"])
+                    btn_find_src = gr.Button("Найти лица на фото", elem_classes=["secondary-btn"])
                     src_status = gr.Markdown("", elem_classes=["status-text"])
                     src_count = gr.State(0)
-                    
+
                     src_face_slots = []
                     for i in range(MAX_FACES):
                         with gr.Group(visible=False) as src_grp:
@@ -802,14 +986,15 @@ def build_ui():
                                 src_crop = gr.Image(label=f"Источник #{i+1}", height=100, interactive=False)
                         src_face_slots.append(src_grp)
                         src_face_slots.append(src_crop)
-                    
+
                     src_grps_only = [src_face_slots[i] for i in range(0, len(src_face_slots), 2)]
                     src_crops_only = [src_face_slots[i] for i in range(1, len(src_face_slots), 2)]
 
                     # --- ВИДЕО ---
-                    gr.Markdown("### 2. Видео")
+                    gr.Markdown("### 2. Видео", elem_classes=["section-title"])
+                    gr.Markdown("Ролик, **в котором** нужно заменить лицо. Ползунками ниже задаётся обрабатываемый фрагмент.", elem_classes=["hint"])
                     tgt_video = gr.Video(label="Видео", height=220)
-                    btn_find_vid = gr.Button("🔍 Найти лица в видео (быстро)", elem_classes=["secondary-btn"])
+                    btn_find_vid = gr.Button("Найти лица в видео (быстро)", elem_classes=["secondary-btn"])
                     video_info = gr.Markdown("", elem_classes=["status-text"])
                     vid_status = gr.Markdown("", elem_classes=["status-text"])
                     vid_count = gr.State(0)
@@ -821,7 +1006,7 @@ def build_ui():
                                 vid_crop = gr.Image(label=f"Лицо в видео #{i+1}", height=100, interactive=False)
                         vid_face_slots.append(vid_grp)
                         vid_face_slots.append(vid_crop)
-                    
+
                     vid_grps_only = [vid_face_slots[i] for i in range(0, len(vid_face_slots), 2)]
                     vid_crops_only = [vid_face_slots[i] for i in range(1, len(vid_face_slots), 2)]
 
@@ -830,55 +1015,71 @@ def build_ui():
                         end_sec = gr.Slider(0, 60, value=15, step=0.5, label="Конец (сек)")
 
                     # --- СОПОСТАВЛЕНИЕ ---
-                    gr.Markdown("### 3. Сопоставление лиц")
+                    gr.Markdown("### 3. Сопоставление лиц", elem_classes=["section-title"])
                     with gr.Row():
                         src_choice = gr.Dropdown(choices=[], label="Лицо из фото (Кого вставляем?)")
                         vid_choice = gr.Dropdown(choices=[], label="Лицо в видео (Кому вставляем?)")
 
                     tgt_video.change(on_video_upload, [tgt_video], [start_sec, end_sec, video_info])
 
-                    # События кнопок поиска
                     btn_find_src.click(
-                        lambda: "⏳ Поиск...", None, src_status, show_progress="hidden"
+                        lambda: "Поиск...", None, src_status, show_progress="hidden"
                     ).then(
                         detect_src_faces,
                         [vsrc, vid_det],
                         [src_status, *src_crops_only, *src_grps_only, src_count, src_choice],
                         show_progress="full",
+                        show_progress_on=[vsrc],
                     )
 
                     btn_find_vid.click(
-                        lambda: "⏳ Сканирование видео...", None, vid_status, show_progress="hidden"
+                        lambda: "Сканирование видео...", None, vid_status, show_progress="hidden"
                     ).then(
                         detect_video_faces,
                         [tgt_video, vid_det],
                         [vid_status, *vid_crops_only, *vid_grps_only, vid_count, vid_choice],
                         show_progress="full",
+                        show_progress_on=[tgt_video],
                     )
 
+                    gr.Markdown("### 4. Результат", elem_classes=["section-title"])
                     btn_swap_v = gr.Button(
-                        "✨ Заменить лица в видео", variant="primary",
+                        "Заменить лица в видео", variant="primary",
                         elem_classes=["primary-btn"], size="lg",
                     )
                     out_video = gr.Video(label="Результат")
                     out_path_v = gr.Textbox(label="Файл", interactive=False)
-                    
+
                     btn_swap_v.click(
                         swap_video_slots,
                         [vsrc, tgt_video, start_sec, end_sec,
-                         vid_det, detect_every, vid_enhance, vid_quality, 
+                         vid_det, detect_every, vid_enhance, vid_quality,
                          vid_res, vid_fps, keep_audio,
                          src_choice, vid_choice,
                          src_count, vid_count],
                         [out_video, out_path_v],
                         show_progress="full",
+                        show_progress_on=[out_video],
                     )
 
             # ===================== INPAINT =====================
-            with gr.TabItem("🖌  Выделение"):
+            with gr.TabItem("Выделение"):
                 with gr.Column(elem_classes=["tab-container"]):
-                    # Настройки сверху (как в фото/видео)
-                    with gr.Accordion("⚙️ Настройки редактора", open=True):
+                    gr.HTML(_guide(
+                        "Как это работает",
+                        "Программа перерисовывает выделенную кистью область с помощью нейросети (диффузии).",
+                        [
+                            "Проверьте параметры обработки. Значения по умолчанию подходят для большинства случаев.",
+                            "Загрузите фото в редактор масок ниже.",
+                            "Кистью закрасьте область, которую нужно перерисовать или убрать. Ластиком поправьте края.",
+                            "Нажмите «Обработать выделенное». Результат сохранится в папке <strong>outputs/</strong>.",
+                        ],
+                        "Для базовых заливок можно использовать алгоритм OpenCV. AI-диффузия даёт реалистичную текстуру, "
+                        "но требует скачивания модели (~4 GB) при первом запуске. Для видеокарт с 4 GB VRAM "
+                        "рекомендуется модель «Realistic Vision (SD 1.5)».",
+                    ))
+
+                    with gr.Accordion("Параметры обработки", open=True):
                         inpaint_model = gr.Dropdown(
                             [
                                 "Realistic Vision (SD 1.5)",
@@ -894,11 +1095,12 @@ def build_ui():
                             inpaint_method = gr.Radio(
                                 ["Telea (быстрее)", "Navier-Stokes (чище края)"],
                                 value="Telea (быстрее)",
-                                label="Алгоритм (OpenCV) — для базовых заливок",
+                                label="Алгоритм (OpenCV)",
+                                info="Для базовых заливок без нейросети",
                             )
                             inpaint_radius = gr.Slider(3, 15, value=7, step=1, label="Радиус (OpenCV)")
 
-                        with gr.Accordion("⚙️ AI-настройки (для диффузии)", open=False):
+                        with gr.Accordion("AI-настройки (для диффузии)", open=False):
                             ai_prompt = gr.Textbox(
                                 label="Промпт",
                                 value="nude body, realistic skin, natural anatomy, high detail, photorealistic",
@@ -918,34 +1120,32 @@ def build_ui():
                                 ai_strength = gr.Slider(0.3, 1.0, value=1.0, step=0.05, label="Strength")
                                 ai_seed = gr.Number(value=0, label="Seed", precision=0)
 
-                    gr.Markdown("""
-                    #### Кисть + ластик
-                    1. Загрузите фото  
-                    2. Кистью закрасьте область, которую нужно перерисовать / убрать  
-                    3. Ластиком поправьте края · размер кисти — слайдером в редакторе  
-                    4. Нажмите **Обработать выделенное**
-                    """)
-                    
+                    gr.Markdown("### 1. Загрузка и маска", elem_classes=["section-title"])
+                    gr.Markdown(
+                        "Загрузите фото и закрасьте область. Кисть и ластик находятся в верхней панели редактора.",
+                        elem_classes=["hint"],
+                    )
+
                     try:
                         inpaint_editor = gr.ImageEditor(
                             label="Рисование маски",
                             type="numpy",
                             height=420,
-                            brush=gr.Brush(default_size=28, colors=["#ff2d55"], default_color="#ff2d55"),
+                            brush=gr.Brush(default_size=28, colors=["#3BB5D6"], default_color="#3BB5D6"),
                             eraser=gr.Eraser(default_size=28),
                             layers=False,
                             transforms=(),
                         )
                     except TypeError:
-                        # Старые версии Gradio
                         inpaint_editor = gr.ImageEditor(
                             label="Рисование маски",
                             type="numpy",
                             height=420,
                         )
 
+                    gr.Markdown("### 2. Результат", elem_classes=["section-title"])
                     btn_inpaint = gr.Button(
-                        "✨ Обработать выделенное",
+                        "Обработать выделенное",
                         variant="primary",
                         elem_classes=["primary-btn"],
                         size="lg",
@@ -962,14 +1162,14 @@ def build_ui():
                             inpaint_model, 
                         ],
                         [inpaint_out, inpaint_path],
+                        show_progress="full",
+                        show_progress_on=[inpaint_out],
                     )
 
         gr.HTML("""
-        <div class="tips">
-            <strong>Качество</strong><br>
-            • Для лучшей картинки: детекция <code>640/800</code>, резкость <code>Среднее/Сильное</code>, видео <code>CRF 18–20</code>, детекция каждый кадр.<br>
-            • Звук копируется из исходного видео (галочка «Сохранять звук»).<br>
-            • Результаты — в <code>outputs/</code>.
+        <div class="footnote">
+            Результаты сохраняются в папке <code>outputs/</code>. Используйте только изображения и видео,
+            на обработку которых у вас есть права и согласие изображённых на них людей.
         </div>
         """)
 
