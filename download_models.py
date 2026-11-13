@@ -20,9 +20,9 @@ MODELS = {
 
 # Опциональные (для вкладки "Выделение" / Инпейнт)
 OPTIONAL = {
-    "realisticVisionV60B1_v50VAE-inpainting.safetensors": "https://huggingface.co/AdamLucek/Realistic-Vision-V60B1-Inpainting/resolve/main/realisticVisionV60B1_v50VAE-inpainting.safetensors?download=true",
     "lustifySDXLNSFW_v20-inpainting.safetensors": "https://huggingface.co/andro-flock/LUSTIFY-SDXL-NSFW-checkpoint-v2-0-INPAINTING/resolve/main/lustifySDXLNSFW_v20-inpainting.safetensors?download=true",
     "tryOffAnyone.safetensors": "https://huggingface.co/ixarchakos/tryOffAnyone/resolve/main/model.safetensors?download=true",
+    "realisticVisionV60B1_v50VAE-inpainting.safetensors": "https://huggingface.co/75dhsx/SG161222/resolve/0d09bc9938f3404178908aaeb6c9673d640910c1/realisticVisionV60B1_v50VAE-inpainting.safetensors?download=true",
 }
 
 
