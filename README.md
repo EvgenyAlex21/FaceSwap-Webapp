@@ -25,8 +25,8 @@
 ## Быстрый старт
 
 ```bash
-git clone <your-repo-url> local-faceswap
-cd local-faceswap
+git clone <your-repo-url> FaceSwap-Webapp
+cd FaceSwap-Webapp
 
 python -m venv venv
 
@@ -136,7 +136,7 @@ pip install nvidia-cudnn-cu12
 ## Структура проекта
 
 ```text
-local-faceswap/
+FaceSwap-Webapp/
 ├── app/
 │   ├── main.py          # Gradio UI (Фото, Видео, Выделение)
 │   ├── swapper.py       # Ядро замены лиц (детекция, замена, видео)
