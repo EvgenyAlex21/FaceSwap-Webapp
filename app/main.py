@@ -114,6 +114,13 @@ def _resize_long_side(img_bgr: np.ndarray, long_side: int) -> np.ndarray:
     return cv2.resize(img_bgr, (nw, nh), interpolation=interp)
 
 
+def _fmt_hms(seconds: float) -> str:
+    seconds = max(0, int(round(float(seconds or 0))))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
 def _crop_face(img_bgr, face, pad: float = 0.35):
     h, w = img_bgr.shape[:2]
     x1, y1, x2, y2 = map(int, face.bbox)
@@ -274,7 +281,12 @@ def swap_photo_slots(
 
 def on_video_upload(video):
     if video is None:
-        return gr.update(maximum=60, value=0), gr.update(maximum=60, value=0), "Загрузите видео"
+        return (
+            gr.update(maximum=60, value=0),
+            gr.update(maximum=60, value=0),
+            "Загрузите видео",
+            "Отрезок: **—**",
+        )
     try:
         try:
             video = str(copy_to_uploads(video, prefix="meta"))
@@ -285,10 +297,22 @@ def on_video_upload(video):
         return (
             gr.update(maximum=dur, value=0),
             gr.update(maximum=dur, value=min(dur, 15.0)),
-            f"Длительность: **{dur:.1f}** сек · {total} кадров · {fps:.1f} fps",
+            f"Длительность: **{_fmt_hms(dur)}** ({dur:.1f} сек) · {total} кадров · {fps:.1f} fps",
+            f"Отрезок: **{_fmt_hms(0)} — {_fmt_hms(min(dur, 15.0))}**",
         )
     except Exception as e:
-        return gr.update(), gr.update(), f"Ошибка: {e}"
+        return gr.update(), gr.update(), f"Ошибка: {e}", "Отрезок: **—**"
+
+
+def _update_range_text(start, end):
+    try:
+        s = float(start or 0)
+        e = float(end or 0)
+    except Exception:
+        return "Отрезок: **—**"
+    if e <= s:
+        return f"Отрезок: **{_fmt_hms(s)} — {_fmt_hms(s)}** (конец должен быть больше начала)"
+    return f"Отрезок: **{_fmt_hms(s)} — {_fmt_hms(e)}** (длительность {_fmt_hms(e - s)})"
 
 
 def detect_video_faces(video_path, det_mode, progress=gr.Progress(track_tqdm=False)):
@@ -798,8 +822,6 @@ def build_ui():
                         "Размер готового изображения приводится к 1920 px по длинной стороне.",
                     ))
 
-                    photo_quality = gr.State("Full HD (1920)")
-
                     with gr.Accordion("Параметры обработки", open=True):
                         with gr.Row():
                             photo_det = gr.Dropdown(
@@ -815,6 +837,13 @@ def build_ui():
                             photo_format = gr.Radio(
                                 ["PNG", "JPG"], value="PNG", label="Формат файла",
                                 info="PNG — без потерь, JPG — компактнее",
+                            )
+                        with gr.Row():
+                            photo_quality = gr.Dropdown(
+                                list(PHOTO_QUALITY.keys()),
+                                value="Full HD (1920)",
+                                label="Качество изображения",
+                                info="Размер по длинной стороне. «Как есть» — без изменения размера",
                             )
 
                     gr.Markdown("### 1. Целевое фото", elem_classes=["section-title"])
@@ -1011,8 +1040,9 @@ def build_ui():
                     vid_crops_only = [vid_face_slots[i] for i in range(1, len(vid_face_slots), 2)]
 
                     with gr.Row():
-                        start_sec = gr.Slider(0, 60, value=0, step=0.5, label="Начало (сек)")
-                        end_sec = gr.Slider(0, 60, value=15, step=0.5, label="Конец (сек)")
+                        start_sec = gr.Slider(0, 60, value=0, step=0.1, label="Начало (сек)")
+                        end_sec = gr.Slider(0, 60, value=15, step=0.1, label="Конец (сек)")
+                    range_display = gr.Markdown("Отрезок: **00:00:00 — 00:00:15**", elem_classes=["status-text"])
 
                     # --- СОПОСТАВЛЕНИЕ ---
                     gr.Markdown("### 3. Сопоставление лиц", elem_classes=["section-title"])
@@ -1020,7 +1050,9 @@ def build_ui():
                         src_choice = gr.Dropdown(choices=[], label="Лицо из фото (Кого вставляем?)")
                         vid_choice = gr.Dropdown(choices=[], label="Лицо в видео (Кому вставляем?)")
 
-                    tgt_video.change(on_video_upload, [tgt_video], [start_sec, end_sec, video_info])
+                    tgt_video.change(on_video_upload, [tgt_video], [start_sec, end_sec, video_info, range_display])
+                    start_sec.change(_update_range_text, [start_sec, end_sec], range_display)
+                    end_sec.change(_update_range_text, [start_sec, end_sec], range_display)
 
                     btn_find_src.click(
                         lambda: "Поиск...", None, src_status, show_progress="hidden"
