@@ -18,6 +18,11 @@ from PIL import Image
 
 from app.swapper import get_swapper
 from app.utils import OUTPUTS, unique_name, write_image, get_video_info, copy_to_uploads
+from app.editor import EDITOR_MODELS, KLEIN_QUANTS, edit_image
+from app.animator import (
+    PRESETS as ANIM_PRESETS, UPSCALES as ANIM_UPSCALES,
+    DEFAULT_NEGATIVE as ANIM_NEGATIVE, animate_image,
+)
 from app.inpaint import inpaint_region, inpaint_ai
 
 MAX_FACES = 6
@@ -68,6 +73,12 @@ VIDEO_QUALITY = {
     "Среднее (CRF 23)": 23,
     "Быстрое (CRF 26)": 26,
 }
+
+INPAINT_MODELS = [
+    "Realistic Vision (SD 1.5 inpaint)",
+    "LUSTIFY (SDXL inpaint)",
+    "TryOffAnyone (одежда)",
+]
 
 
 def _to_bgr(img):
@@ -341,41 +352,36 @@ def detect_video_faces(video_path, det_mode, start_sec, end_sec, progress=gr.Pro
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    
+
     if total_frames <= 0:
         cap.release()
         return "Ошибка чтения видео", *[None]*MAX_FACES, *[gr.update(visible=False)]*MAX_FACES, 0, gr.update(choices=[], value=None)
 
     start_frame = int(max(0, float(start_sec or 0)) * fps)
     end_frame = int(min(total_frames, float(end_sec or 0) * fps)) if end_sec and end_sec > start_sec else total_frames
-    
+
     if end_frame <= start_frame:
         end_frame = total_frames
 
     frames_to_scan = end_frame - start_frame
     step = max(1, frames_to_scan // 100)
-    
+
     unique_faces = []
     crops = []
 
-    # Порог схожести (косинусное расстояние). 
-    # Чем меньше, тем строже. 0.5 - оптимально для insightface buffalo_l
-    # Порог косинусного сходства. 
-    # 1.0 - абсолютно идентичны, 0.0 - разные люди.
-    # 0.45 - 0.55 - хороший баланс для видео (позволяет распознать
-    # одно лицо в разных ракурсах, но не склеивает разных людей).
-    threshold = 0.5 
+    # Порог косинусного сходства. 0.45–0.55 — баланс для видео.
+    threshold = 0.5
 
     for f_idx in range(start_frame, end_frame, step):
         progress(min(0.05 + 0.8 * ((f_idx - start_frame)/frames_to_scan), 0.85), desc=f"Анализ кадра {f_idx}...")
         cap.set(cv2.CAP_PROP_POS_FRAMES, f_idx)
         ret, frame = cap.read()
         if not ret: break
-        
+
         faces = sw.get_faces(frame)
         for face in faces:
             is_new = True
-            
+
             if face.embedding is not None:
                 emb1 = face.embedding / np.linalg.norm(face.embedding)
                 for uf in unique_faces:
@@ -402,15 +408,15 @@ def detect_video_faces(video_path, det_mode, start_sec, end_sec, progress=gr.Pro
             break
 
     cap.release()
-    
+
     if not unique_faces:
         return "Лица в видео не найдены", *[None]*MAX_FACES, *[gr.update(visible=False)]*MAX_FACES, 0, gr.update(choices=[], value=None)
 
     vis = [gr.update(visible=True)] * len(unique_faces) + [gr.update(visible=False)] * (MAX_FACES - len(unique_faces))
     crops_padded = crops + [None] * (MAX_FACES - len(crops))
-    
+
     choices = [f"Лицо #{i+1}" for i in range(len(unique_faces))]
-    
+
     return (
         f"Найдено уникальных лиц: **{len(unique_faces)}**",
         *crops_padded,
@@ -423,11 +429,11 @@ def detect_video_faces(video_path, det_mode, start_sec, end_sec, progress=gr.Pro
 def detect_src_faces(src_img, det_mode):
     if src_img is None:
         return "Загрузите фото", *[None]*MAX_FACES, *[gr.update(visible=False)]*MAX_FACES, 0, gr.update(choices=[], value=None)
-    
+
     sw = _apply_det(det_mode)
     bgr = _to_bgr(src_img)
     faces = sw.get_faces(bgr)
-    
+
     if not faces:
         return "Лица на фото не найдены", *[None]*MAX_FACES, *[gr.update(visible=False)]*MAX_FACES, 0, gr.update(choices=[], value=None)
 
@@ -440,9 +446,9 @@ def detect_src_faces(src_img, det_mode):
         else:
             crops.append(None)
             vis.append(gr.update(visible=False))
-            
+
     choices = [f"Лицо #{i+1}" for i in range(len(faces))]
-    
+
     return (
         f"Найдено лиц: **{len(faces)}**",
         *crops,
@@ -454,7 +460,7 @@ def detect_src_faces(src_img, det_mode):
 
 def swap_video_slots(
     src_img, target_video, start_sec, end_sec,
-    det_mode, detect_every, enhance_mode, video_quality, 
+    det_mode, detect_every, enhance_mode, video_quality,
     video_res, video_fps, keep_audio,
     src_face_choice, vid_face_choice,
     src_video_count, tgt_video_count,
@@ -486,12 +492,12 @@ def swap_video_slots(
 
     sw = _apply_det(det_mode)
     src_path = _save_tmp(src_img, "vsrc")
-    
+
     source_map = {vid_idx: (src_path, src_idx)}
-    
+
     strength = ENHANCE_STRENGTH.get(enhance_mode, 0.45)
     crf = VIDEO_QUALITY.get(video_quality, 20)
-    
+
     tgt_res_val = VIDEO_RESOLUTIONS.get(video_res, 0)
     tgt_fps_val = VIDEO_FPS.get(video_fps, 0)
 
@@ -575,38 +581,58 @@ def run_inpaint(editor_data, method, radius,
     if mask is None or int(np.asarray(mask).sum()) == 0:
         raise gr.Error("Маска пустая — выберите кисть и закрасьте нужную область")
 
-    progress(0.15, desc="Маска создана. Подготовка модели...")
+    progress(0.15, desc="Маска создана. Освобождаю VRAM...")
+
+    # --- Выгружаем ВСЕ модели, которые могут занимать VRAM ---
+    try:
+        import torch, gc
+
+        # face-swap
+        try:
+            from app.swapper import _swapper
+            if _swapper is not None and _swapper._initialized:
+                _swapper.app = None
+                _swapper.swapper = None
+                _swapper._initialized = False
+                print("[Inpaint] face-swap выгружен")
+        except Exception as e:
+            print(f"[Inpaint] face-swap: {e}")
+
+        # редактор
+        try:
+            from app.editor import _klein, _ip2p
+            if _klein is not None:
+                _klein.unload()
+                print("[Inpaint] FLUX.2 klein выгружен")
+            if _ip2p is not None:
+                _ip2p.unload()
+                print("[Inpaint] InstructPix2Pix выгружен")
+        except Exception as e:
+            print(f"[Inpaint] editor: {e}")
+
+        # аниматор
+        try:
+            from app.animator import _animator
+            if _animator is not None:
+                _animator.unload()
+                print("[Inpaint] LTX-Video выгружен")
+        except Exception as e:
+            print(f"[Inpaint] animator: {e}")
+
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+
+        free, total = torch.cuda.mem_get_info()
+        print(f"[Inpaint] VRAM после выгрузки: {free/1024**3:.2f} GB из {total/1024**3:.2f} GB")
+    except Exception as e:
+        print(f"[Inpaint] Очистка VRAM: {e}")
+
+    progress(0.25, desc=f"Загрузка модели {model_choice}...")
 
     try:
-        from app.inpaint import _pipe, _pipe_model_name, MODELS
-        
-        if "TryOffAnyone" in model_choice:
-            local_model_file = MODELS / "tryOffAnyone.safetensors"
-        elif "LUSTIFY" in model_choice:
-            local_model_file = MODELS / "lustifySDXLNSFW_v20-inpainting.safetensors"
-        else:
-            local_model_file = MODELS / "realisticVisionV60B1_v50VAE-inpainting.safetensors"
-
-        if _pipe is None or _pipe_model_name != str(local_model_file):
-            progress(0.25, desc=f"Загрузка модели {model_choice} (может занять 1-2 минуты)...")
-        else:
-            progress(0.25, desc="Модель загружена. Генерация...")
-
-        if "LUSTIFY" in model_choice:
-            try:
-                import torch, gc
-                from app.swapper import _swapper
-                if _swapper is not None and _swapper._initialized:
-                    _swapper.app = None
-                    _swapper.swapper = None
-                    _swapper._initialized = False
-                    gc.collect()
-                    torch.cuda.empty_cache()
-                    free, total = torch.cuda.mem_get_info()
-                    print(f"[Inpaint] Face-swap модели выгружены. "
-                          f"VRAM свободно: {free/1024**3:.2f} GB из {total/1024**3:.2f} GB")
-            except Exception as e:
-                print(f"[Inpaint] Не удалось выгрузить face-swap: {e}")
+        from app.inpaint import inpaint_ai, unload_inpaint
 
         path = inpaint_ai(
             image_bgr, np.asarray(mask),
@@ -616,11 +642,184 @@ def run_inpaint(editor_data, method, radius,
             strength=float(ai_strength), seed=int(ai_seed),
             model_choice=model_choice,
         )
-        
+
         progress(0.95, desc="Финальная сборка...")
+
+        # --- Выгружаем пайплайн после инпейнта ---
+        unload_inpaint()
+
         return _to_pil(cv2.imread(str(path))), str(path)
     except Exception as e:
         raise gr.Error(str(e))
+
+
+# ---------- РЕДАКТОР / ПРЕОБРАЖЕНИЕ ----------
+
+EDITOR_EXAMPLES = [
+    "Измени цвет волос на розовый",
+    "Добавь солнцезащитные очки",
+    "Сделай глаза немного больше и выразительнее",
+    "Замени фон на закат на морском берегу",
+    "Добавь снегопад и зимнюю атмосферу",
+]
+
+ANIMATE_EXAMPLES = [
+    "Человек улыбается и слегка поворачивает голову, волосы чуть колышутся",
+    "Собака виляет хвостом и моргает, камера медленно приближается",
+    "Лёгкий ветер колышет листья и траву, облака медленно плывут",
+    "Волны накатывают на берег, чайки пролетают в небе",
+]
+
+
+def _prog(progress):
+    def cb(p, msg=""):
+        progress(min(max(float(p), 0.0), 1.0), desc=msg or "Обработка...")
+    return cb
+
+
+def _friendly(e: Exception) -> str:
+    from app.vram import is_oom
+    text = str(e)
+    low = text.lower()
+    if is_oom(e):
+        return ("Не хватило видеопамяти даже на минимальном разрешении. Закройте другие программы, использующие GPU, "
+                "выберите меньший размер или более лёгкую модель.")
+    if isinstance(e, FileNotFoundError):
+        return text
+    if any(k in low for k in ("connection", "timed out", "max retries", "name resolution", "offline", "401", "403", "gated")):
+        return ("Не удалось скачать модель с Hugging Face. Проверьте интернет или заранее выполните "
+                "python download_models.py --editor / --animate. Подробности: " + text[:300])
+    return text[:600]
+
+
+def editor_model_changed(label):
+    key = EDITOR_MODELS.get(label, "klein")
+    if key == "ip2p":
+        return (
+            gr.update(minimum=10, maximum=40, value=20, info="InstructPix2Pix: 15–25 шагов"),
+            gr.update(visible=True),
+            gr.update(visible=False),
+        )
+    return (
+        gr.update(minimum=2, maximum=8, value=4, info="FLUX.2 klein дистиллирована: 4 шага — оптимум"),
+        gr.update(visible=False),
+        gr.update(visible=True),
+    )
+
+
+def run_editor(image, prompt, model_label, max_side, steps, image_guidance, seed, quant,
+               translate, restore_size, progress=gr.Progress(track_tqdm=False)):
+    if image is None:
+        raise gr.Error("Загрузите фото")
+    if not (prompt or "").strip():
+        raise gr.Error("Напишите, что нужно изменить на фото")
+    try:
+        # --- Освобождаем VRAM перед запуском тяжёлой модели ---
+        try:
+            import torch, gc
+            from app.swapper import _swapper
+            if _swapper is not None and _swapper._initialized:
+                _swapper.app = None
+                _swapper.swapper = None
+                _swapper._initialized = False
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+        except Exception as e:
+            print(f"[Editor] Не удалось выгрузить face-swap: {e}")
+
+        out, path, info = edit_image(
+            image, prompt,
+            model_key=EDITOR_MODELS.get(model_label, "klein"),
+            max_side=int(max_side), steps=int(steps),
+            seed=int(seed) if seed is not None else -1,
+            quant=quant or "Q4_K_M",
+            image_guidance=float(image_guidance),
+            translate=bool(translate), restore_size=bool(restore_size),
+            progress=_prog(progress),
+        )
+    except gr.Error:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise gr.Error(_friendly(e))
+    progress(1.0, desc="Готово")
+    return out, str(path), info
+
+
+def run_animate(image, prompt, negative, preset, steps, guidance, seed,
+                translate, add_quality, codec_prep, upscale,
+                progress=gr.Progress(track_tqdm=False)):
+    if image is None:
+        raise gr.Error("Загрузите фото")
+    if not (prompt or "").strip():
+        raise gr.Error("Опишите, что должно происходить в кадре")
+
+    # --- Освобождаем VRAM перед запуском аниматора ---
+    try:
+        import torch, gc
+
+        # face-swap
+        try:
+            from app.swapper import _swapper
+            if _swapper is not None and _swapper._initialized:
+                _swapper.app = None
+                _swapper.swapper = None
+                _swapper._initialized = False
+                print("[Animate] face-swap выгружен")
+        except Exception as e:
+            print(f"[Animate] face-swap: {e}")
+
+        # редактор
+        try:
+            from app.editor import _klein, _ip2p
+            if _klein is not None:
+                _klein.unload()
+                print("[Animate] FLUX.2 klein выгружен")
+            if _ip2p is not None:
+                _ip2p.unload()
+                print("[Animate] InstructPix2Pix выгружен")
+        except Exception as e:
+            print(f"[Animate] editor: {e}")
+
+        # инпейнт
+        try:
+            from app.inpaint import unload_inpaint
+            unload_inpaint()
+            print("[Animate] inpaint выгружен")
+        except Exception as e:
+            print(f"[Animate] inpaint: {e}")
+
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+
+        free, total = torch.cuda.mem_get_info()
+        print(f"[Animate] VRAM после выгрузки: {free/1024**3:.2f} GB из {total/1024**3:.2f} GB")
+    except Exception as e:
+        print(f"[Animate] Очистка VRAM: {e}")
+
+    try:
+        path, info = animate_image(
+            image, prompt, negative=negative or "",
+            preset=preset, steps=int(steps), guidance=float(guidance),
+            seed=int(seed) if seed is not None else -1,
+            translate=bool(translate), add_quality=bool(add_quality),
+            codec_prep=bool(codec_prep), upscale_key=upscale,
+            progress=_prog(progress),
+        )
+    except gr.Error:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise gr.Error(_friendly(e))
+    progress(1.0, desc="Готово")
+    path = str(Path(path).resolve())
+    return path, path, info
 
 
 CUSTOM_CSS = """
@@ -790,6 +989,10 @@ footer { display: none !important; }
 """
 
 
+def _const(value):
+    return lambda: value
+
+
 def _guide(title_text, intro, steps, note):
     items = "".join(f"<li>{s}</li>" for s in steps)
     return (
@@ -855,7 +1058,7 @@ def build_ui():
         <div class="app-header">
             <div>
                 <h1>Local Face Swap</h1>
-                <p>Замена лиц на фото и видео, умное выделение</p>
+                <p>Замена лиц, редактор фото по промпту, оживление снимков и умный инпейнт</p>
             </div>
             <p class="header-note">Обработка выполняется на вашем компьютере. Исходные файлы не передаются во внешние сервисы.</p>
         </div>
@@ -1108,8 +1311,8 @@ def build_ui():
                         vid_choice = gr.Dropdown(choices=[], label="Лицо в видео (Кому вставляем?)")
 
                     tgt_video.change(
-                        on_video_upload, 
-                        [tgt_video], 
+                        on_video_upload,
+                        [tgt_video],
                         [start_sec, end_sec, video_info, range_display, vid_choice]
                     )
 
@@ -1163,6 +1366,160 @@ def build_ui():
                         [out_video, out_path_v],
                         show_progress="full",
                         show_progress_on=[out_video],
+                    )
+
+            # ===================== РЕДАКТОР =====================
+            with gr.TabItem("Редактор"):
+                with gr.Column(elem_classes=["tab-container"]):
+                    gr.HTML(_guide(
+                        "Как это работает",
+                        "Нейросеть меняет фото по вашему текстовому описанию: цвет волос, очки, глаза, фон, погода, стиль.",
+                        [
+                            "Загрузите фото — человек, животное, природа, что угодно.",
+                            "Опишите правку одной фразой на русском или английском, например «добавь очки».",
+                            "Нажмите «Применить правки». Результат сохранится в папке <strong>outputs/</strong>.",
+                            "Не устроило — измените формулировку или seed. Кнопка «Использовать результат как исходное фото» "
+                            "позволяет вносить правки по цепочке.",
+                        ],
+                        "Основная модель — FLUX.2 klein 4B (Apache 2.0): при первом запуске скачивается ≈12 ГБ. "
+                        "На видеокарте с 4 ГБ работает через квантование GGUF и выгрузку на CPU: ожидайте 1–3 минуты на правку. "
+                        "Лучше всего модель понимает конкретные короткие команды. Если видеопамяти не хватает, размер "
+                        "автоматически уменьшается.",
+                    ))
+
+                    with gr.Accordion("Параметры обработки", open=True):
+                        with gr.Row():
+                            ed_model = gr.Dropdown(
+                                list(EDITOR_MODELS.keys()), value=list(EDITOR_MODELS.keys())[0],
+                                label="Модель",
+                                info="FLUX.2 klein — точнее и качественнее; InstructPix2Pix — быстрее и легче",
+                            )
+                            ed_size = gr.Dropdown(
+                                [512, 640, 768, 896, 1024], value=640,
+                                label="Рабочий размер (px)",
+                                info="По длинной стороне. Для 4 ГБ VRAM оптимально 512–768",
+                            )
+                        with gr.Row():
+                            ed_steps = gr.Slider(2, 8, value=4, step=1, label="Шаги",
+                                                 info="FLUX.2 klein дистиллирована: 4 шага — оптимум")
+                            ed_imgguid = gr.Slider(1.0, 2.5, value=1.5, step=0.1, visible=False,
+                                                   label="Сохранение оригинала",
+                                                   info="Выше — результат ближе к исходному фото")
+                            ed_seed = gr.Number(value=-1, precision=0, label="Seed", info="-1 — случайный")
+                        with gr.Row():
+                            ed_quant = gr.Dropdown(
+                                KLEIN_QUANTS, value="Q4_K_M", label="Квантование FLUX",
+                                info="Q3 — меньше VRAM, Q5 — чуть точнее",
+                            )
+                            ed_translate = gr.Checkbox(value=True, label="Переводить русский промпт на английский")
+                            ed_restore = gr.Checkbox(value=False, label="Растянуть результат до размера оригинала")
+
+                    gr.Markdown("### 1. Исходное фото", elem_classes=["section-title"])
+                    ed_in = gr.Image(label="Исходное фото", type="pil", height=360)
+
+                    gr.Markdown("### 2. Что изменить", elem_classes=["section-title"])
+                    gr.Markdown("Короткая и конкретная команда работает лучше длинного описания.", elem_classes=["hint"])
+                    ed_prompt = gr.Textbox(
+                        label="Промпт", lines=2,
+                        placeholder="Например: измени цвет волос на рыжий и добавь очки",
+                    )
+                    with gr.Row():
+                        ed_ex_btns = [gr.Button(ex, size="sm", elem_classes=["secondary-btn"]) for ex in EDITOR_EXAMPLES]
+
+                    gr.Markdown("### 3. Результат", elem_classes=["section-title"])
+                    ed_btn = gr.Button("Применить правки", variant="primary",
+                                       elem_classes=["primary-btn"], size="lg")
+                    ed_out = gr.Image(label="Результат", height=420)
+                    ed_info = gr.Markdown("", elem_classes=["status-text"])
+                    ed_path = gr.Textbox(label="Файл", interactive=False)
+                    ed_chain = gr.Button("Использовать результат как исходное фото", elem_classes=["secondary-btn"])
+
+                    ed_model.change(editor_model_changed, [ed_model], [ed_steps, ed_imgguid, ed_size])
+
+                    for btn, ex in zip(ed_ex_btns, EDITOR_EXAMPLES):
+                        btn.click(_const(ex), None, ed_prompt)
+
+                    ed_btn.click(
+                        run_editor,
+                        [ed_in, ed_prompt, ed_model, ed_size, ed_steps, ed_imgguid,
+                         ed_seed, ed_quant, ed_translate, ed_restore],
+                        [ed_out, ed_path, ed_info],
+                        show_progress="full",
+                        show_progress_on=[ed_out],
+                    )
+                    ed_chain.click(lambda img: img, [ed_out], [ed_in])
+
+            # ===================== ПРЕОБРАЖЕНИЕ =====================
+            with gr.TabItem("Преображение"):
+                with gr.Column(elem_classes=["tab-container"]):
+                    gr.HTML(_guide(
+                        "Как это работает",
+                        "Нейросеть оживляет статичное фото: добавляет движение, мимику, движение камеры — по текстовому описанию.",
+                        [
+                            "Загрузите фото — портрет, животное, пейзаж.",
+                            "Опишите сцену: что происходит, как двигается камера.",
+                            "Выберите пресет по соотношению скорости и качества.",
+                            "Нажмите «Оживить фото». Результат сохранится в папке <strong>outputs/</strong>.",
+                        ],
+                        "Модель — LTX-Video 0.9.5 (2B параметров). При первом запуске скачивается 15–25 ГБ. "
+                        "На 4 ГБ VRAM работает с выгрузкой слоёв на CPU: ожидайте 3–10 минут на клип. "
+                        "Разрешение и длина клипа подстраиваются под свободную видеопамять автоматически.",
+                    ))
+
+                    with gr.Accordion("Параметры обработки", open=True):
+                        with gr.Row():
+                            an_preset = gr.Dropdown(
+                                list(ANIM_PRESETS.keys()), value=list(ANIM_PRESETS.keys())[0],
+                                label="Пресет",
+                                info="Размер и длина клипа. Выше — дольше и тяжелее",
+                            )
+                            an_upscale = gr.Dropdown(
+                                list(ANIM_UPSCALES.keys()), value="Как есть",
+                                label="Апскейл",
+                                info="Увеличение готового клипа",
+                            )
+                        with gr.Row():
+                            an_steps = gr.Slider(10, 50, value=30, step=1, label="Шаги")
+                            an_guidance = gr.Slider(1.0, 7.0, value=3.0, step=0.1, label="Guidance")
+                            an_seed = gr.Number(value=-1, precision=0, label="Seed", info="-1 — случайный")
+                        with gr.Row():
+                            an_translate = gr.Checkbox(value=True, label="Переводить промпт на английский")
+                            an_quality = gr.Checkbox(value=True, label="Добавлять quality-суффикс")
+                            an_codec = gr.Checkbox(value=True, label="JPEG-подготовка кадра (рекомендуется)")
+
+                    gr.Markdown("### 1. Исходное фото", elem_classes=["section-title"])
+                    an_in = gr.Image(label="Фото", type="pil", height=360)
+
+                    gr.Markdown("### 2. Что должно происходить", elem_classes=["section-title"])
+                    an_prompt = gr.Textbox(
+                        label="Описание сцены", lines=2,
+                        placeholder="Например: человек улыбается, волосы колышутся на ветру",
+                    )
+                    with gr.Row():
+                        an_ex_btns = [gr.Button(ex, size="sm", elem_classes=["secondary-btn"]) for ex in ANIMATE_EXAMPLES]
+
+                    with gr.Accordion("Negative prompt", open=False):
+                        an_negative = gr.Textbox(
+                            label="Negative prompt", value=ANIM_NEGATIVE, lines=3,
+                        )
+
+                    gr.Markdown("### 3. Результат", elem_classes=["section-title"])
+                    an_btn = gr.Button("Оживить фото", variant="primary",
+                                       elem_classes=["primary-btn"], size="lg")
+                    an_out = gr.Video(label="Результат")
+                    an_info = gr.Markdown("", elem_classes=["status-text"])
+                    an_path = gr.Textbox(label="Файл", interactive=False)
+
+                    for btn, ex in zip(an_ex_btns, ANIMATE_EXAMPLES):
+                        btn.click(_const(ex), None, an_prompt)
+
+                    an_btn.click(
+                        run_animate,
+                        [an_in, an_prompt, an_negative, an_preset, an_steps, an_guidance,
+                         an_seed, an_translate, an_quality, an_codec, an_upscale],
+                        [an_out, an_path, an_info],
+                        show_progress="full",
+                        show_progress_on=[an_out],
                     )
 
             # ===================== INPAINT =====================
@@ -1253,7 +1610,7 @@ def build_ui():
                         elem_classes=["primary-btn"],
                         size="lg",
                     )
-                    
+
                     inpaint_out = gr.Image(label="Результат", height=360)
                     inpaint_path = gr.Textbox(label="Файл", interactive=False)
 
@@ -1262,7 +1619,7 @@ def build_ui():
                         [
                             inpaint_editor, inpaint_method, inpaint_radius,
                             ai_prompt, ai_negative, ai_steps, ai_guidance, ai_strength, ai_seed,
-                            inpaint_model, 
+                            inpaint_model,
                         ],
                         [inpaint_out, inpaint_path],
                         show_progress="full",
