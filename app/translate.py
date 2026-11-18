@@ -5,7 +5,6 @@ LTX-Video (T5) и InstructPix2Pix (CLIP) понимают только англ�
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 from .utils import MODELS
 

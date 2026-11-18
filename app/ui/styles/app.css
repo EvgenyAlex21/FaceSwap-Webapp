@@ -1,0 +1,163 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&display=swap');
+
+:root {
+    --ink: #E8EEF7;
+    --muted: #94A5BE;
+    --line: #243B5C;
+    --panel: #0F1D33;
+    --panel-2: #0A1629;
+    --accent: #3BB5D6;
+    --grad: linear-gradient(120deg, #2D6BDB 0%, #1B9BC0 58%, #19A7A0 100%);
+    --serif: 'Source Serif 4', Georgia, 'Times New Roman', serif;
+}
+
+body {
+    background:
+        radial-gradient(1100px 560px at 92% -8%, rgba(27, 155, 192, 0.20), transparent 60%),
+        radial-gradient(900px 520px at -8% 6%, rgba(45, 107, 219, 0.22), transparent 58%),
+        linear-gradient(180deg, #091426 0%, #0B1B31 100%) !important;
+    background-attachment: fixed !important;
+}
+
+.gradio-container {
+    background: transparent !important;
+    max-width: 1120px !important;
+    margin: 0 auto !important;
+    padding: 0 24px 48px !important;
+    font-family: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif !important;
+    color: var(--ink);
+}
+
+/* ---------- Шапка ---------- */
+.app-header {
+    display: flex; align-items: center; justify-content: space-between; gap: 28px;
+    margin: 28px 0 22px; padding: 30px 36px;
+    border-radius: 14px;
+    background: linear-gradient(115deg, #14335F 0%, #1B5A8E 52%, #167F88 100%);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+}
+.gradio-container .app-header h1 {
+    font-family: var(--serif) !important; font-weight: 600 !important;
+    font-size: 2rem !important; letter-spacing: -0.01em;
+    color: #FFFFFF !important; margin: 0 0 4px 0 !important;
+}
+.gradio-container .app-header p { margin: 0 !important; color: rgba(255, 255, 255, 0.82) !important; font-size: 0.97rem !important; }
+.gradio-container .app-header .header-note {
+    max-width: 330px; padding-left: 24px; border-left: 1px solid rgba(255, 255, 255, 0.28);
+    font-size: 0.83rem !important; line-height: 1.55; color: rgba(255, 255, 255, 0.78) !important;
+}
+
+/* ---------- Вкладки ---------- */
+.tabs [role="tablist"], .tab-nav, .tab-wrapper { justify-content: center !important; }
+.tabs button[role="tab"] {
+    font-family: inherit !important; font-size: 0.97rem !important; font-weight: 500 !important;
+    color: var(--muted) !important; background: transparent !important;
+    padding: 10px 4px !important; margin: 0 20px !important;
+    border: none !important; border-radius: 0 !important;
+}
+.tabs button[role="tab"]:hover { color: var(--ink) !important; }
+.tabs button[role="tab"][aria-selected="true"] {
+    color: #FFFFFF !important;
+    background: transparent var(--grad) no-repeat bottom / 100% 2px !important;
+}
+
+/* ---------- Инструкция ---------- */
+.gradio-container .guide {
+    display: grid; grid-template-columns: 200px 1fr; gap: 8px 32px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 22px 26px; margin: 18px 0 22px;
+}
+.gradio-container .guide h2 {
+    font-family: var(--serif) !important; font-size: 1.15rem !important; font-weight: 600 !important;
+    color: #FFFFFF !important; margin: 0 !important; border: none !important;
+}
+.gradio-container .guide p { margin: 0 0 10px; color: var(--ink); font-size: 0.93rem; line-height: 1.6; }
+.gradio-container .guide ol { margin: 0 0 12px; padding-left: 20px; color: var(--ink); font-size: 0.93rem; line-height: 1.65; }
+.gradio-container .guide ol li::marker { color: var(--accent); font-weight: 600; }
+.gradio-container .guide strong { font-weight: 600; color: #FFFFFF; }
+.gradio-container .guide .guide-note {
+    margin: 0; padding-top: 12px; border-top: 1px solid var(--line);
+    color: var(--muted); font-size: 0.86rem; line-height: 1.6;
+}
+
+/* ---------- Заголовки разделов и подсказки ---------- */
+.gradio-container .section-title h3 {
+    font-family: var(--serif) !important; font-size: 1.25rem !important; font-weight: 600 !important;
+    color: #FFFFFF !important; letter-spacing: -0.005em; margin: 26px 0 2px 0 !important;
+}
+.gradio-container .hint, .gradio-container .hint p {
+    color: var(--muted) !important; font-size: 0.9rem !important; line-height: 1.55;
+}
+.gradio-container .hint strong { color: var(--ink); }
+.status-text {
+    min-height: 28px !important; display: flex !important; align-items: center !important;
+    margin-top: 6px !important; color: #9FD8EA !important;
+    font-size: 0.93rem !important; font-weight: 500 !important;
+}
+
+/* ---------- Убираем лишние скроллбары в Markdown и HTML ---------- */
+.prose, .prose pre, .prose code, .md, .html-container {
+    overflow: visible !important;
+    overflow-x: visible !important;
+    overflow-y: visible !important;
+    height: auto !important;
+    max-height: none !important;
+}
+
+/* ---------- Группы (слоты лиц) ---------- */
+.gradio-container .gr-group { background: var(--panel) !important; border: 1px solid var(--line) !important; }
+.gradio-container .gr-group .styler, .gradio-container .form { background: transparent !important; }
+.gradio-container .gr-group .prose { padding: 10px 14px 2px !important; }
+
+/* ---------- Кнопки ---------- */
+.primary-btn {
+    background: var(--grad) !important; border: none !important;
+    color: #fff !important; font-weight: 500 !important; letter-spacing: 0.01em;
+    border-radius: 8px !important; padding: 14px 28px !important;
+}
+.primary-btn:hover { filter: brightness(1.1); }
+.secondary-btn {
+    background: rgba(255, 255, 255, 0.04) !important; border: 1px solid #2F4A70 !important;
+    color: var(--ink) !important; font-weight: 500 !important; border-radius: 8px !important;
+}
+.secondary-btn:hover { border-color: var(--accent) !important; color: #8FDBF0 !important; }
+.gradio-container button:focus-visible,
+.gradio-container input:focus-visible,
+.gradio-container textarea:focus-visible {
+    outline: 2px solid var(--accent) !important; outline-offset: 2px;
+}
+
+/* ---------- Индикатор загрузки ---------- */
+[data-testid="status-tracker"].wrap.default {
+    background: rgba(9, 20, 38, 0.80) !important;
+    backdrop-filter: blur(3px);
+    border-radius: 10px;
+}
+[data-testid="status-tracker"] .eta-bar {
+    background: var(--grad) !important; opacity: 0.16 !important;
+}
+[data-testid="status-tracker"] .margin { transform: scale(2.8); transform-origin: center; }
+[data-testid="status-tracker"] .progress-text {
+    position: absolute !important; left: 0 !important; right: 0 !important; bottom: 18px !important;
+    text-align: center !important; padding: 0 16px !important;
+    font-family: inherit !important; font-size: 0.95rem !important; color: #BFD9F2 !important;
+}
+
+/* ---------- Нижняя заметка ---------- */
+.gradio-container .footnote {
+    margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--line);
+    color: var(--muted); font-size: 0.82rem; line-height: 1.6;
+}
+.gradio-container .footnote code { background: #16294A; padding: 1px 6px; border-radius: 4px; color: #BFD9F2; }
+
+footer { display: none !important; }
+
+@media (max-width: 760px) {
+    .gradio-container .guide { grid-template-columns: 1fr; }
+    .app-header { flex-direction: column; align-items: flex-start; padding: 24px; }
+    .gradio-container .app-header .header-note { padding-left: 0; border-left: none; }
+    .tabs button[role="tab"] { margin: 0 10px !important; }
+}
+@media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+}

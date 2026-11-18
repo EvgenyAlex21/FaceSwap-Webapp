@@ -14,7 +14,6 @@ SVD не принимает текстовые промпты. Чтобы уче
 from __future__ import annotations
 
 import gc
-import io
 import time
 from pathlib import Path
 from typing import Callable, Optional, Tuple
@@ -23,7 +22,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from .utils import MODELS, OUTPUTS, unique_name, create_video_writer, make_browser_compatible
+from .utils import OUTPUTS, unique_name, create_video_writer, make_browser_compatible
 from .vram import free_vram, vram_report, is_oom, activate
 from .translate import to_english
 

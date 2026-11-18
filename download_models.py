@@ -4,14 +4,14 @@
 
 Запускать из корня проекта:
 
-  python -m app.download_models             # только face-swap (быстро, ~0.6 ГБ)
-  python -m app.download_models --inpaint   # + модели инпейнта (Realistic Vision / LUSTIFY / TryOffAnyone)
-  python -m app.download_models --editor    # + Редактор: FLUX.2 klein 4B GGUF (~12 ГБ)
-  python -m app.download_models --ip2p      # + Редактор (лёгкий): InstructPix2Pix (~5 ГБ)
-  python -m app.download_models --animate   # + Преображение (SVD)
-  python -m app.download_models --translate # + переводчик RU→EN для промптов (~0.3 ГБ)
-  python -m app.download_models --all       # всё перечисленное
-  python -m app.download_models --force     # перекачать существующие файлы
+  python download_models.py             # только face-swap (быстро, ~0.6 ГБ)
+  python download_models.py --inpaint   # + модели инпейнта (Realistic Vision / LUSTIFY / TryOffAnyone)
+  python download_models.py --editor    # + Редактор: FLUX.2 klein 4B GGUF (~12 ГБ)
+  python download_models.py --ip2p      # + Редактор (лёгкий): InstructPix2Pix (~5 ГБ)
+  python download_models.py --animate   # + Преображение (SVD)
+  python download_models.py --translate # + переводчик RU→EN для промптов (~0.3 ГБ)
+  python download_models.py --all       # всё перечисленное
+  python download_models.py --force     # перекачать существующие файлы
 
 Скачивание возобновляется после обрыва. Если файлы не скачать заранее, приложение
 скачает их само при первом запуске соответствующей вкладки.
@@ -22,7 +22,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 MODELS_DIR = ROOT / "models"
@@ -150,7 +150,7 @@ def main():
 
     print("\n=== Готово! ===")
     print("Модели в папке models/")
-    print("Запуск: python app/main.py")
+    print("Запуск: python -m app.main")
 
 
 if __name__ == "__main__":

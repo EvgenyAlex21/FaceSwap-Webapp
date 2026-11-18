@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import gc
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Tuple
 
 import cv2
 import numpy as np
