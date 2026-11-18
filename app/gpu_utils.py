@@ -1,6 +1,5 @@
 # Диагностика CUDA для onnxruntime.
 
-
 from __future__ import annotations
 
 import os
@@ -36,14 +35,7 @@ def _find_nvidia_dll_dirs() -> List[Path]:
 
 
 def _preload_torch(verbose: bool = True) -> None:
-    """Импортирует torch ДО добавления nvidia/*/bin в PATH/DLL-директории.
 
-    torch/lib содержит собственный cuDNN 9. Если сначала добавить nvidia/*/bin,
-    Windows загрузит cudnn64_9.dll из pip-пакета nvidia-cudnn-cu12, а затем
-    torch/lib/cudnn_cnn64_9.dll будет искать символы в уже загруженной
-    несовместимой версии → WinError 127 («процедура не найдена»).
-    Предзагрузка torch кеширует его DLL первыми и предотвращает конфликт.
-    """
     if "torch" in sys.modules:
         if verbose:
             try:
@@ -70,8 +62,6 @@ def add_nvidia_dll_directories():
     if not dirs:
         _log("[GPU] nvidia-*/bin не найдены. Для ORT CUDA: pip install nvidia-cudnn-cu12 nvidia-cublas-cu12 nvidia-cuda-runtime-cu12 nvidia-cuda-nvrtc-cu12")
         return
-    # PATH помогает найти транзитивные зависимости (например, cublasLt64_12 -> cublas64_12),
-    # add_dll_directory — для прямых зависимостей самого onnxruntime.
     path_parts = os.environ.get("PATH", "").split(os.pathsep)
     for d in dirs:
         try:
@@ -129,8 +119,6 @@ def setup_device(verbose: bool = True) -> Tuple[str, List[Any]]:
         _log("[GPU] Диагностика onnxruntime (CUDA → CPU)")
         _log("=" * 60)
 
-    # КРИТИЧНО: сначала предзагружаем torch (его cuDNN кешируется первым),
-    # затем добавляем nvidia/*/bin для onnxruntime. Иначе — WinError 127.
     _preload_torch(verbose=verbose)
 
     add_nvidia_dll_directories()

@@ -36,7 +36,6 @@ def _noop(p: float, msg: str = "") -> None:
 
 
 def _hard_cleanup():
-    """Жёсткая очистка RAM и VRAM."""
     gc.collect()
     try:
         import torch
@@ -64,7 +63,6 @@ def size_ladder(max_side: int) -> list[int]:
     return ladder
 
 
-# =====================================================================
 class KleinEditor:
     def __init__(self):
         self.pipe = None
@@ -108,7 +106,6 @@ class KleinEditor:
         if self.pipe is not None:
             self.unload()
 
-        # Жёсткая очистка перед загрузкой
         _hard_cleanup()
 
         from diffusers import Flux2KleinPipeline, Flux2Transformer2DModel, GGUFQuantizationConfig
@@ -231,7 +228,6 @@ class KleinEditor:
         raise last_err or RuntimeError("Не удалось выполнить редактирование")
 
 
-# =====================================================================
 class Ip2pEditor:
     def __init__(self):
         self.pipe = None
@@ -317,7 +313,6 @@ class Ip2pEditor:
         raise last_err or RuntimeError("Не удалось выполнить редактирование")
 
 
-# =====================================================================
 _klein: Optional[KleinEditor] = None
 _ip2p: Optional[Ip2pEditor] = None
 

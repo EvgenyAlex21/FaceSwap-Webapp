@@ -37,7 +37,6 @@ def _load():
 
 
 def to_english(text: str) -> tuple[str, bool]:
-    """Возвращает (текст, был_ли_переведён). Если переводчик недоступен — исходный текст."""
     text = (text or "").strip()
     if not text or not has_cyrillic(text):
         return text, False

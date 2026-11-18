@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import sys
+import os
 from pathlib import Path
 from typing import List, Tuple
 import math
+
+os.environ["HF_HOME"] = str(Path(__file__).resolve().parent.parent / ".cache" / "huggingface")
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -20,7 +23,8 @@ from app.swapper import get_swapper
 from app.utils import OUTPUTS, unique_name, write_image, get_video_info, copy_to_uploads
 from app.editor import EDITOR_MODELS, KLEIN_QUANTS, edit_image
 from app.animator import (
-    PRESETS as ANIM_PRESETS, UPSCALES as ANIM_UPSCALES,
+    RESOLUTIONS as ANIM_RESOLUTIONS, DURATIONS as ANIM_DURATIONS,
+    UPSCALES as ANIM_UPSCALES,
     DEFAULT_NEGATIVE as ANIM_NEGATIVE, animate_image,
 )
 from app.inpaint import inpaint_region, inpaint_ai
@@ -369,7 +373,6 @@ def detect_video_faces(video_path, det_mode, start_sec, end_sec, progress=gr.Pro
     unique_faces = []
     crops = []
 
-    # Порог косинусного сходства. 0.45–0.55 — баланс для видео.
     threshold = 0.5
 
     for f_idx in range(start_frame, end_frame, step):
@@ -645,7 +648,6 @@ def run_inpaint(editor_data, method, radius,
 
         progress(0.95, desc="Финальная сборка...")
 
-        # --- Выгружаем пайплайн после инпейнта ---
         unload_inpaint()
 
         return _to_pil(cv2.imread(str(path))), str(path)
@@ -653,7 +655,7 @@ def run_inpaint(editor_data, method, radius,
         raise gr.Error(str(e))
 
 
-# ---------- РЕДАКТОР / ПРЕОБРАЖЕНИЕ ----------
+# ---------- EDITOR / TRANSFORMATION ----------
 
 EDITOR_EXAMPLES = [
     "Измени цвет волос на розовый",
@@ -714,7 +716,6 @@ def run_editor(image, prompt, model_label, max_side, steps, image_guidance, seed
     if not (prompt or "").strip():
         raise gr.Error("Напишите, что нужно изменить на фото")
     try:
-        # --- Освобождаем VRAM перед запуском тяжёлой модели ---
         try:
             import torch, gc
             from app.swapper import _swapper
@@ -749,7 +750,7 @@ def run_editor(image, prompt, model_label, max_side, steps, image_guidance, seed
     return out, str(path), info
 
 
-def run_animate(image, prompt, negative, preset, steps, guidance, seed,
+def run_animate(image, prompt, negative, resolution_key, duration_label, steps, guidance, seed,
                 translate, add_quality, codec_prep, upscale,
                 progress=gr.Progress(track_tqdm=False)):
     if image is None:
@@ -757,11 +758,9 @@ def run_animate(image, prompt, negative, preset, steps, guidance, seed,
     if not (prompt or "").strip():
         raise gr.Error("Опишите, что должно происходить в кадре")
 
-    # --- Освобождаем VRAM перед запуском аниматора ---
     try:
         import torch, gc
 
-        # face-swap
         try:
             from app.swapper import _swapper
             if _swapper is not None and _swapper._initialized:
@@ -777,6 +776,7 @@ def run_animate(image, prompt, negative, preset, steps, guidance, seed,
             from app.editor import _klein, _ip2p
             if _klein is not None:
                 _klein.unload()
+                _klein._emb_cache.clear()   # очищаем кэш эмбеддингов
                 print("[Animate] FLUX.2 klein выгружен")
             if _ip2p is not None:
                 _ip2p.unload()
@@ -802,10 +802,17 @@ def run_animate(image, prompt, negative, preset, steps, guidance, seed,
     except Exception as e:
         print(f"[Animate] Очистка VRAM: {e}")
 
+    # --- Парсим длительность из строки вида "2 сек" ---
+    try:
+        duration_sec = float(duration_label.replace(" сек", "").strip())
+    except Exception:
+        duration_sec = 2.0  # безопасное значение по умолчанию
+
     try:
         path, info = animate_image(
             image, prompt, negative=negative or "",
-            preset=preset, steps=int(steps), guidance=float(guidance),
+            resolution_key=resolution_key, duration_sec=duration_sec,
+            steps=int(steps), guidance=float(guidance),
             seed=int(seed) if seed is not None else -1,
             translate=bool(translate), add_quality=bool(add_quality),
             codec_prep=bool(codec_prep), upscale_key=upscale,
@@ -1458,7 +1465,7 @@ def build_ui():
                         [
                             "Загрузите фото — портрет, животное, пейзаж.",
                             "Опишите сцену: что происходит, как двигается камера.",
-                            "Выберите пресет по соотношению скорости и качества.",
+                            "Выберите разрешение и длительность клипа.",
                             "Нажмите «Оживить фото». Результат сохранится в папке <strong>outputs/</strong>.",
                         ],
                         "Модель — LTX-Video 0.9.5 (2B параметров). При первом запуске скачивается 15–25 ГБ. "
@@ -1468,20 +1475,26 @@ def build_ui():
 
                     with gr.Accordion("Параметры обработки", open=True):
                         with gr.Row():
-                            an_preset = gr.Dropdown(
-                                list(ANIM_PRESETS.keys()), value=list(ANIM_PRESETS.keys())[0],
-                                label="Пресет",
-                                info="Размер и длина клипа. Выше — дольше и тяжелее",
+                            an_resolution = gr.Dropdown(
+                                list(ANIM_RESOLUTIONS.keys()), value="512p (512 px)",
+                                label="Качество (высота)",
+                                info="Чем выше, тем детальнее и медленнее. На 4 ГБ VRAM оптимум — 512",
                             )
-                            an_upscale = gr.Dropdown(
-                                list(ANIM_UPSCALES.keys()), value="Как есть",
-                                label="Апскейл",
-                                info="Увеличение готового клипа",
+                            an_duration = gr.Dropdown(
+                                [f"{d} сек" for d in ANIM_DURATIONS], value="2 сек",
+                                label="Длина клипа",
+                                info="На 4 ГБ VRAM реалистично 2–4 секунды",
                             )
                         with gr.Row():
                             an_steps = gr.Slider(10, 50, value=30, step=1, label="Шаги")
                             an_guidance = gr.Slider(1.0, 7.0, value=3.0, step=0.1, label="Guidance")
                             an_seed = gr.Number(value=-1, precision=0, label="Seed", info="-1 — случайный")
+                        with gr.Row():
+                            an_upscale = gr.Dropdown(
+                                list(ANIM_UPSCALES.keys()), value="Как есть",
+                                label="Увеличение результата",
+                                info="Простое масштабирование готового видео (Lanczos)",
+                            )
                         with gr.Row():
                             an_translate = gr.Checkbox(value=True, label="Переводить промпт на английский")
                             an_quality = gr.Checkbox(value=True, label="Добавлять quality-суффикс")
@@ -1515,11 +1528,11 @@ def build_ui():
 
                     an_btn.click(
                         run_animate,
-                        [an_in, an_prompt, an_negative, an_preset, an_steps, an_guidance,
-                         an_seed, an_translate, an_quality, an_codec, an_upscale],
+                        [an_in, an_prompt, an_negative, an_resolution, an_duration,
+                         an_steps, an_guidance, an_seed,
+                         an_translate, an_quality, an_codec, an_upscale],
                         [an_out, an_path, an_info],
-                        show_progress="full",
-                        show_progress_on=[an_out],
+                        show_progress="full", show_progress_on=[an_out],
                     )
 
             # ===================== INPAINT =====================

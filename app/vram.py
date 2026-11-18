@@ -30,8 +30,6 @@ def vram_report(tag: str = "") -> str:
 
 
 def unload_faceswap() -> None:
-    """Выгружает onnx-модели face-swap, чтобы освободить видеопамять под диффузию.
-    Они загрузятся заново при следующем обращении (ленивая инициализация)."""
     try:
         from app.swapper import _swapper
         if _swapper is not None and _swapper._initialized:
@@ -51,8 +49,6 @@ def is_oom(exc: BaseException) -> bool:
 
 
 class OffloadedTextEncoder:
-    """Контекст: накладывает на текстовый энкодер последовательную выгрузку (слой за слоем
-    приезжает на GPU), чтобы 8–10 ГБ энкодер отработал на 4 ГБ видеокарте."""
 
     def __init__(self, model, device: str = "cuda"):
         self.model = model
@@ -74,7 +70,6 @@ class OffloadedTextEncoder:
         return False
 
 
-# ---- Реестр «активной» тяжёлой модели -------------------------------------
 _active = {"name": None, "unload": None}
 
 

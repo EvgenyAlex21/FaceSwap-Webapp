@@ -1,6 +1,5 @@
 # Ядро face-swap. GPU/CPU, звук в видео, качество.
 
-
 from __future__ import annotations
 
 from pathlib import Path

@@ -15,7 +15,6 @@ from .utils import OUTPUTS, unique_name, write_image, MODELS
 
 
 def _hard_cleanup():
-    """Жёсткая очистка RAM и VRAM."""
     gc.collect()
     try:
         import torch
@@ -232,7 +231,6 @@ def get_inpaint_pipeline(device: str = "cuda", model_choice: str = "Realistic Vi
             "Скачайте её с Hugging Face и положите в папку models."
         )
 
-    # ---- Жёсткая очистка и проверка VRAM ----
     _hard_cleanup()
     if device == "cuda" and torch.cuda.is_available():
         try:
@@ -447,7 +445,6 @@ def inpaint_ai(
 
 
 def unload_inpaint():
-    """Выгружает текущий пайплайн инпейнта и освобождает VRAM."""
     global _pipe, _pipe_device, _pipe_model_name
     _pipe = None
     _pipe_device = None

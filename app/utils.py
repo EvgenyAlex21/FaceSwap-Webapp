@@ -100,7 +100,6 @@ def merge_audio(video_no_audio: str | Path, source_video: str | Path,
     if end_sec and end_sec > start_sec:
         duration = float(end_sec) - float(start_sec or 0)
     else:
-        # Получаем длительность обработанного видео (без звука)
         try:
             _, _, _, _, duration = get_video_info(video_no_audio)
         except Exception:
