@@ -111,7 +111,7 @@ Face swap (`onnxruntime-gpu`) и диффузия (`torch`) требуют со�
 
 ```bash
 pip install onnxruntime-gpu==1.20.2
-pip install nvidia-cublas-cu12 nvidia-cuda-runtime-cu12 nvidia-cudnn-cu12 nvidia-cuda-nvrtc-cu12
+pip install nvidia-cublas-cu12 nvidia-cuda-runtime-cu12 nvidia-cudnn-cu12 nvidia-cuda-nvrtc-cu12 nvidia-cufft-cu12
 ```
 
 Для диффузии обязательно ставьте версию PyTorch с CUDA (пример для CUDA 12.4):
@@ -181,14 +181,57 @@ python download_models.py --inpaint   # или --editor / --ip2p / --animate / -
 
 Скрипт идемпотентен — уже скачанные файлы пропускаются.
 
-### 7. FLUX.2 klein не загружается (ошибка GGUF/трансформера)
-Обновите `diffusers`, `transformers`, `gguf` (`pip install -U diffusers transformers gguf`) или переключитесь на **InstructPix2Pix** в выпадающем списке модели.
+### 7. FLUX.2 klein: `ImportError: cannot import name 'Flux2KleinPipeline' from 'diffusers'`
+Классы `Flux2KleinPipeline` и `Flux2Transformer2DModel` ещё не попали в стабильный PyPI-релиз `diffusers` — обычный `pip install -U diffusers` их не даст. Ставьте из репозитория GitHub (как рекомендует карточка модели на Hugging Face) и добавьте зависимости для GGUF:
 
-### 8. Медленная работа на CPU
+```bash
+pip install -U git+https://github.com/huggingface/diffusers.git
+pip install -U gguf transformers accelerate sacremoses sentencepiece
+```
+
+Проверка:
+
+```bash
+python -c "from diffusers import Flux2KleinPipeline, Flux2Transformer2DModel, GGUFQuantizationConfig; print('OK')"
+```
+
+Если импорт проходит, но падает `from_single_file` на GGUF-трансформере — обновите пакет `gguf` или переключитесь на **InstructPix2Pix** в выпадающем списке модели.
+
+### 8. `torch 2.x+cpu, cuda.is_available=False` — torch стал CPU-сборкой
+Если раньше CUDA работал, а в логе появилось `torch ...+cpu` / `cuda.is_available=False`, значит какой-то недавний `pip install -U <пакет>` доставил torch с обычного PyPI (на Windows PyPI отдаёт только CPU-сборку) и затёр CUDA-версию. Верните CUDA-сборку:
+
+```bash
+pip uninstall -y torch torchvision torchaudio
+pip install torch --index-url https://download.pytorch.org/whl/cu124
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+```
+
+Ожидается вывод вида `2.6.0+cu124 True`.
+
+### 9. ORT CUDA: `depends on "cufft64_11.dll" which is missing` (Error 126)
+Установлены cuDNN/cublas/runtime, но нет cuFFT. Ставится одним пайпом — приложение само подхватывает `nvidia/*/bin` через `dll_directory`:
+
+```bash
+pip install nvidia-cufft-cu12
+```
+
+Если ошибка укажет на другую cu12-DLL, доустановите её по вхождению (`nvidia-curand-cu12`, `nvidia-nvjitlink-cu12` и т.п.).
+
+### 10. `[Translate] Не удалось загрузить переводчик: Could not import module 'MarianMTModel'`
+Переводчику не хватает зависимостей. Установите их и **перезапустите приложение** (subprocess'ов нет, пакет должен импортироваться заново):
+
+```bash
+pip install sacremoses sentencepiece
+```
+
+### 11. Медленная работа на CPU
 Это ожидаемо: face swap на CPU делает доли кадра в секунду. Для первых тестов используйте детекцию **«Быстрый (320)»**, обработку каждого 2–3-го кадра и CRF 23–26.
 
-### 9. Антивирус / SmartScreen
+### 12. Антивирус / SmartScreen
 Приложение локально, без сети после загрузки моделей. Если SmartScreen блокирует .bat-файлы, добавьте папку проекта в исключения.
+
+### 13. Gradio-варнинг `The value passed into gr.Dropdown() is not in the list of choices: 512p (512 px)`
+Безвредное предупреждение: значение по умолчанию в `main.py`/`layout.py` не совпадает ни с одним элементом списка `choices`. Поправьте одну из строк так, чтобы строки совпали символ в символ (или добавьте `allow_custom_value=True`), и варнинг исчезнет.
 
 ---
 
@@ -321,6 +364,20 @@ nvidia-smi
 ```
 
 Если CUDA в списке провайдеров есть, но face-swap уходит на CPU — смотрите блок `[GPU] ---- ОТЛАДКА ----` в логах при запуске: там видны результат тестовой сессии, найденные nvidia-пакеты и точная причина.
+
+---
+
+## Google Colab
+
+Приложение можно запустить и в облаке: готовый ноутбук собирает репозиторий, ставит зависимости с CUDA-torch, скачивает модели и открывает публичную ссылку Gradio. Смотрите `colab/faceswap_colab.ipynb` (или соберите самостоятельно по шагам):
+
+1. `nvidia-smi` — проверить GPU.
+2. `git clone` репозитория и установка зависимостей.
+3. Переустановка/проверка `torch` с CUDA и установка `diffusers` из git + `gguf`.
+4. `python download_models.py --translate` (и другие флаги при необходимости).
+5. Запуск `python -m app.main` с патчем `gr.Blocks.launch` (`share=True`), т.к. в `main.py` share выключен для локального режима.
+
+Colab бесплатно даёт T4 (16 ГБ VRAM), поэтому klein работает без лесенки снижения разрешения.
 
 ---
 

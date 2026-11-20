@@ -115,8 +115,8 @@ class KleinEditor:
         try:
             transformer = Flux2Transformer2DModel.from_single_file(
                 str(gguf_path),
-                quantization_config=GGUFQuantizationConfig(compute_dtype=torch.bfloat16),
-                torch_dtype=torch.bfloat16,
+                quantization_config=GGUFQuantizationConfig(compute_dtype=torch.bfloat16),  
+                torch_dtype=torch.bfloat16,  
                 config=str(root),
                 subfolder="transformer",
             )
